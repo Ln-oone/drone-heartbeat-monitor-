@@ -1,114 +1,97 @@
+
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
-from streamlit_drawable_layer import drawable_layer
 import time
 import random
 from datetime import datetime
-import numpy as np
 
-# -------------------------- 全局配置 --------------------------
-st.set_page_config(page_title="无人机智能航线规划系统", layout="wide", page_icon="✈️")
-st.title("✈️ 无人机智能化应用 - 项目Demo")
+# 页面配置
+st.set_page_config(
+    page_title="无人机心跳监控系统",
+    page_icon="✈️",
+    layout="wide"
+)
 
-# -------------------------- 坐标系转换引擎 --------------------------
-class CoordTransformer:
-    _a = 6378245.0
-    _ee = 0.00669342162296594323
+# 初始化会话状态
+if "drone_status" not in st.session_state:
+    st.session_state.drone_status = "在线"
+if "heartbeat_logs" not in st.session_state:
+    st.session_state.heartbeat_logs = []
 
-    @staticmethod
-    def _transform_lat(lon, lat):
-        x = lon - 105.0
-        y = lat - 35.0
-        val = -100.0 + 2.0*x + 3.0*y + 0.2*y*y + 0.1*x*y + 0.2*abs(x)
-        val += (20.0*np.sin(6.0*x*np.pi) + 20.0*np.sin(2.0*x*np.pi)) * 2.0 / 3.0
-        val += (20.0*np.sin(y*np.pi) + 40.0*np.sin(y/3.0*np.pi)) * 2.0 / 3.0
-        val += (160.0*np.sin(y/12.0*np.pi) + 320*np.sin(y*np.pi/30.0)) * 2.0 / 3.0
-        return val
+# 标题
+st.title("✈️ 无人机心跳监控系统")
+st.divider()
 
-    @staticmethod
-    def _transform_lon(lon, lat):
-        x = lon - 105.0
-        y = lat - 35.0
-        val = 30.0 + x + 2.0*y + 0.1*x*x + 0.1*x*y + 0.1*abs(x)
-        val += (20.0*np.sin(6.0*x*np.pi) + 20.0*np.sin(2.0*x*np.pi)) * 2.0 / 3.0
-        val += (20.0*np.sin(x*np.pi) + 40.0*np.sin(x/3.0*np.pi)) * 2.0 / 3.0
-        val += (150.0*np.sin(x/12.0*np.pi) + 300.0*np.sin(x/30.0*np.pi)) * 2.0 / 3.0
-        return val
-
-    @classmethod
-    def wgs84_to_gcj02(cls, lon, lat):
-        dlat = cls._transform_lon(lon-105.0, lat-35.0)
-        dlon = cls._transform_lat(lon-105.0, lat-35.0)
-        radlat = lat / 180.0 * np.pi
-        magic = np.sin(radlat)
-        magic = 1 - cls._ee * magic * magic
-        sqrtmagic = np.sqrt(magic)
-        dlat = (dlat * 180.0) / ((cls._a * (1 - cls._ee)) / (magic * sqrtmagic) * np.pi)
-        dlon = (dlon * 180.0) / (cls._a / sqrtmagic * np.cos(radlat) * np.pi)
-        mlat = lat + dlat
-        mlon = lon + dlon
-        return round(mlon, 6), round(mlat, 6)
-
-    @classmethod
-    def gcj02_to_wgs84(cls, lon, lat):
-        dlon = cls._transform_lon(lon-105.0, lat-35.0)
-        dlat = cls._transform_lat(lon-105.0, lat-35.0)
-        radlat = lat / 180.0 * np.pi
-        magic = np.sin(radlat)
-        magic = 1 - cls._ee * magic * magic
-        sqrtmagic = np.sqrt(magic)
-        dlat = (dlat * 180.0) / ((cls._a * (1 - cls._ee)) / (magic * sqrtmagic) * np.pi)
-        dlon = (dlon * 180.0) / (cls._a / sqrtmagic * np.cos(radlat) * np.pi)
-        mlat = lat + dlat
-        mlon = lon + dlon
-        return round(2*lon - mlon, 6), round(2*lat - mlat, 6)
-
-# -------------------------- 侧边栏 --------------------------
+# 侧边栏配置
 with st.sidebar:
-    st.header("⚙️ 控制面板")
-    coord_mode = st.radio("坐标系设置", ["WGS-84 (GPS原始)", "GCJ-02 (高德/百度)"])
+    st.header("系统设置")
+    drone_id = st.text_input("无人机ID", value="DRONE-001")
+    check_interval = st.slider("心跳检测间隔(秒)", 1, 10, 3)
     st.divider()
+    st.subheader("状态控制")
+    start_monitor = st.button("启动监控", type="primary")
+    stop_monitor = st.button("停止监控")
+    reset_logs = st.button("清空日志")
 
-    # 起点 A（南京科技职业学院）
-    st.subheader("📍 起点 A")
-    a_lat = st.number_input("纬度", value=32.3015, format="%.6f", key="a_lat")
-    a_lon = st.number_input("经度", value=118.8260, format="%.6f", key="a_lon")
-    if st.button("✅ 应用 A 点"):
-        if coord_mode == "GCJ-02 (高德/百度)":
-            a_lon, a_lat = CoordTransformer.gcj02_to_wgs84(a_lon, a_lat)
-        st.session_state['A'] = (a_lat, a_lon)
-        st.success("A点已设置")
+# 主界面状态展示
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("当前状态", st.session_state.drone_status)
+with col2:
+    st.metric("心跳次数", len(st.session_state.heartbeat_logs))
+with col3:
+    st.metric("最后心跳时间", 
+              st.session_state.heartbeat_logs[-1]["time"] if st.session_state.heartbeat_logs else "无")
 
-    # 终点 B（南京科技职业学院）
-    st.subheader("🏁 终点 B")
-    b_lat = st.number_input("纬度", value=32.3035, format="%.6f", key="b_lat")
-    b_lon = st.number_input("经度", value=118.8280, format="%.6f", key="b_lon")
-    if st.button("✅ 应用 B 点"):
-        if coord_mode == "GCJ-02 (高德/百度)":
-            b_lon, b_lat = CoordTransformer.gcj02_to_wgs84(b_lon, b_lat)
-        st.session_state['B'] = (b_lat, b_lon)
-        st.success("B点已设置")
+st.divider()
 
-    st.divider()
-    st.subheader("📊 飞行参数")
-    fly_height = st.slider("飞行高度 (m)", 20, 200, 80, step=5)
-    fly_speed = st.slider("飞行速度 (m/s)", 3, 15, 8, step=1)
+# 心跳日志展示
+st.subheader("心跳日志")
+log_container = st.container(height=400)
 
-# -------------------------- 标签页 --------------------------
-tab1, tab2 = st.tabs(["📝 航线规划 (3D地图)", "📡 飞行监控 (心跳包)"])
+# 监控逻辑
+if start_monitor:
+    st.session_state.drone_status = "在线"
+    st.success(f"已启动无人机 {drone_id} 心跳监控")
+    
+    # 模拟心跳检测循环
+    while st.session_state.drone_status == "在线":
+        # 生成模拟心跳数据
+        heartbeat_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        signal_strength = random.randint(70, 100)
+        battery = random.randint(30, 100)
+        
+        # 记录心跳日志
+        log_entry = {
+            "time": heartbeat_time,
+            "drone_id": drone_id,
+            "signal": signal_strength,
+            "battery": battery,
+            "status": "正常"
+        }
+        st.session_state.heartbeat_logs.append(log_entry)
+        
+        # 显示最新日志
+        with log_container:
+            for log in reversed(st.session_state.heartbeat_logs[-10:]):
+                st.info(f"[{log['time']}] 无人机{log['drone_id']} | 信号强度: {log['signal']}% | 电量: {log['battery']}% | 状态: {log['status']}")
+        
+        # 检测间隔
+        time.sleep(check_interval)
+        
+        # 模拟异常情况（10%概率）
+        if random.random() < 0.1:
+            st.session_state.drone_status = "离线"
+            st.error(f"无人机 {drone_id} 心跳丢失！")
+            break
 
-# -------------------------- 航线规划 --------------------------
-with tab1:
-    col_map, col_obs = st.columns([3, 1])
-    with col_map:
-        st.subheader("地图视图")
-        center_lat, center_lon = st.session_state.get('A', (32.3025, 118.8270))
+if stop_monitor:
+    st.session_state.drone_status = "离线"
+    st.warning(f"已停止无人机 {drone_id} 监控")
 
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=19)
-        folium.TileLayer(tiles='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', name="OpenStreetMap").add_to(m)
+if reset_logs:
+    st.session_state.heartbeat_logs = []
+    st.info("日志已清空")
 
-        if 'A' in st.session_state:
-            folium.Marker(st.session_state['A'], icon=folium.Icon(color="red", icon="plane"), popup="起点 A").add_to(m)
-        if 'B' in st.session_state:
-   
+# 底部提示
+st.divider()
+st.caption("系统说明：实时监控无人机心跳信号，记录信号强度、电量等关键数据，异常时自动报警")
