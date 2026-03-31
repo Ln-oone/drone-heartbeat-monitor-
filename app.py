@@ -161,7 +161,7 @@ map_html = """
 
     <script>
         // 初始化 Cesium (使用官方推荐地形和影像)
-        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIwNzJhZjI3OS03NDIxLTQ5ZDUtOWUzNC00ODViNWY2NDQzMjYiLCJpZCI6NDExNTg1LCJpYXQiOjE3NzQ5MjkyNjB9.6PXQ-TjGtYqRO-Dk8eBuOd1uRuQWG_gY4wM9hGRCcfk';
+        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2ZTYwOGM5My00YWNhLTRmZDYtYWViOC05MWJhMDY3ZjE2MjYiLCJpZCI6NDExNTg1LCJpYXQiOjE3NzQ5NTg3NDV9.IAQXwOY1MeOvXBYzA4mvE-SSvTLR968JdGtM4_U4x6I';
         // 如果上述 Token 失效，请前往 https://cesium.com/ion/signup 免费申请并替换
         
         const viewer = new Cesium.Viewer('cesiumContainer', {
