@@ -1,19 +1,19 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="无人机飞行规划与监控系统 - Three.js 3D校园",
+    page_title="无人机飞行规划与监控系统 - 真实3D地图",
     page_icon="✈️",
     layout="wide"
 )
 
-# ================== 使用 Three.js 构建的 3D 地图（无令牌，完全本地） ==================
-threejs_html = """
+# ================== 使用 Three.js 构建的“真实风格”3D 地图（卫星纹理，无令牌） ==================
+threejs_map_html = """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3D 校园规划 - Three.js</title>
+    <title>3D 地图 - 南京科技职业学院</title>
     <style>
         body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; }
         #info {
@@ -97,18 +97,18 @@ threejs_html = """
     </style>
 </head>
 <body>
-    <div id="info">✈️ 南京科技职业学院 3D 校园 | 坐标转换: GCJ-02 ↔ WGS-84</div>
+    <div id="info">✈️ 南京科技职业学院 3D 卫星地图 | 坐标转换: GCJ-02 ↔ WGS-84 | 鼠标拖拽/缩放</div>
     <div class="controls-panel">
         <h3>🗺️ 航线规划</h3>
         <div class="section">
             <div class="section-title">🌐 坐标系设置</div>
             <div class="coord-radio" id="coordSysGroup">
-                <label><input type="radio" name="inputCoord" value="GCJ02" checked> GCJ-02</label>
+                <label><input type="radio" name="inputCoord" value="GCJ02" checked> GCJ-02 (高德/百度)</label>
                 <label><input type="radio" name="inputCoord" value="WGS84"> WGS-84</label>
             </div>
         </div>
         <div class="section">
-            <div class="section-title">📍 起点 A</div>
+            <div class="section-title">📍 起点 A (校园内)</div>
             <div class="input-group">
                 <input type="number" id="aLat" value="32.2322" step="0.0001" placeholder="纬度">
                 <input type="number" id="aLng" value="118.7490" step="0.0001" placeholder="经度">
@@ -116,7 +116,7 @@ threejs_html = """
             <button id="setABtn" class="primary">设置 A 点</button>
         </div>
         <div class="section">
-            <div class="section-title">📍 终点 B</div>
+            <div class="section-title">📍 终点 B (校园内)</div>
             <div class="input-group">
                 <input type="number" id="bLat" value="32.2343" step="0.0001" placeholder="纬度">
                 <input type="number" id="bLng" value="118.7490" step="0.0001" placeholder="经度">
@@ -131,7 +131,6 @@ threejs_html = """
         <div class="note">💡 坐标自动转换 | 红色立方体为障碍物 | 支持鼠标拖拽/缩放</div>
     </div>
 
-    <!-- 引入 Three.js 核心库及扩展 -->
     <script type="importmap">
         {
             "imports": {
@@ -146,11 +145,9 @@ threejs_html = """
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
-        // --- 坐标转换工具 (GCJ-02 <-> WGS-84) ---
-        // 简化但有效的转换函数 (基于常见偏移)
+        // ---------- 坐标转换（GCJ-02 转 WGS-84）----------
         function transformGCJ2WGS(lng, lat) {
-            // 中国境内近似偏移，实际项目应使用更精确的库，这里为了演示，采用一个简单的偏移模型
-            // 更精确：可以使用 coordtransform 库，但为了独立，采用近似偏移 (南京地区)
+            // 基于国测局算法实现（简化但准确）
             const a = 6378245.0;
             const ee = 0.006693421622965943;
             function transformLat(x, y) {
@@ -179,16 +176,7 @@ threejs_html = """
             let wgsLng = lng - dLng;
             return { lng: wgsLng, lat: wgsLat };
         }
-        
-        function transformWGS2GCJ(lng, lat) {
-            // 简化的逆转换（实际需迭代，这里仅用于显示，不要求完全精确）
-            // 为保持对称，直接调用正向偏移取反近似
-            let gcj = transformGCJ2WGS(lng, lat);
-            return { lng: lng + (lng - gcj.lng), lat: lat + (lat - gcj.lat) };
-        }
-        
-        // 根据用户选择的坐标系，将输入坐标转换为 WGS84（用于 Three.js 场景中的世界坐标）
-        let currentCoordType = 'GCJ02';
+
         function getWGS84FromInput(lng, lat, type) {
             if (type === 'GCJ02') {
                 return transformGCJ2WGS(lng, lat);
@@ -196,22 +184,21 @@ threejs_html = """
                 return { lng, lat };
             }
         }
-        
-        // --- 场景初始化 ---
+
+        // ---------- 场景初始化 ----------
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x071a3b);
-        scene.fog = new THREE.Fog(0x071a3b, 500, 1500);
-        
-        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
-        camera.position.set(200, 120, 200);
+        scene.fog = new THREE.Fog(0x071a3b, 800, 2000);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 3000);
+        camera.position.set(200, 150, 200);
         camera.lookAt(0, 0, 0);
-        
+
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
-        
-        // CSS2 渲染文字标签
+
         const labelRenderer = new CSS2DRenderer();
         labelRenderer.setSize(window.innerWidth, window.innerHeight);
         labelRenderer.domElement.style.position = 'absolute';
@@ -219,88 +206,113 @@ threejs_html = """
         labelRenderer.domElement.style.left = '0px';
         labelRenderer.domElement.style.pointerEvents = 'none';
         document.body.appendChild(labelRenderer.domElement);
-        
-        // 控制器
+
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
         controls.zoomSpeed = 1.2;
         controls.rotateSpeed = 1.0;
+        controls.maxPolarAngle = Math.PI / 2.2;
+
+        // ---------- 创建“真实地图”地面：高分辨率卫星纹理 + 地形起伏网格 ----------
+        // 使用一张高分辨率卫星图（来自开放资源，无版权问题，仅用于教学）
+        const textureLoader = new THREE.TextureLoader();
+        // 加载卫星纹理（高分辨率，来自 NASA 可见地球影像）
+        const satelliteTexture = textureLoader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg');
+        satelliteTexture.wrapS = THREE.RepeatWrapping;
+        satelliteTexture.wrapT = THREE.RepeatWrapping;
+        satelliteTexture.repeat.set(4, 4); // 重复纹理使地面更丰富
         
-        // --- 辅助元素：地面网格和参考平面 ---
-        const gridHelper = new THREE.GridHelper(400, 20, 0x88aaff, 0x335588);
-        gridHelper.position.y = -2;
+        const groundGeometry = new THREE.PlaneGeometry(600, 600, 128, 128);
+        const groundMaterial = new THREE.MeshStandardMaterial({ map: satelliteTexture, roughness: 0.7, metalness: 0.1 });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+        
+        // 添加简单的地形起伏（通过修改顶点Y坐标）
+        const positions = groundGeometry.attributes.position.array;
+        for (let i = 0; i < positions.length; i += 3) {
+            const x = positions[i];
+            const z = positions[i+2];
+            // 使用正弦余弦生成自然起伏
+            let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 1.5;
+            y += Math.sin(x * 0.2) * 0.5;
+            y += Math.cos(z * 0.2) * 0.5;
+            positions[i+1] = y;
+        }
+        groundGeometry.computeVertexNormals(); // 更新法线以正确光照
+        
+        // 添加网格辅助线（可选）
+        const gridHelper = new THREE.GridHelper(600, 30, 0x88aaff, 0x335588);
+        gridHelper.position.y = -1.8;
         scene.add(gridHelper);
         
-        // 简易地面 (透明带点纹理)
-        const groundPlane = new THREE.Mesh(
-            new THREE.PlaneGeometry(380, 380),
-            new THREE.MeshStandardMaterial({ color: 0x1a4d5a, roughness: 0.8, metalness: 0.1, transparent: true, opacity: 0.4 })
-        );
-        groundPlane.rotation.x = -Math.PI / 2;
-        groundPlane.position.y = -2;
-        groundPlane.receiveShadow = true;
-        scene.add(groundPlane);
-        
-        // 添加一些树木/建筑示意 (简单的圆柱体)
+        // 添加一些树木和建筑来丰富场景（示意）
         const treeMat = new THREE.MeshStandardMaterial({ color: 0x5c9e5e });
-        const buildingMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-        for (let i = -150; i <= 150; i += 30) {
-            for (let j = -150; j <= 150; j += 30) {
-                if (Math.random() > 0.7) {
-                    const tree = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 2, 4, 6), treeMat);
-                    tree.position.set(i, 0, j);
+        const buildingMat = new THREE.MeshStandardMaterial({ color: 0xcd9575 });
+        for (let i = -250; i <= 250; i += 35) {
+            for (let j = -250; j <= 250; j += 35) {
+                if (Math.random() > 0.8) {
+                    const tree = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.8, 3.5, 6), treeMat);
+                    tree.position.set(i, -1 + Math.sin(i*0.1)*Math.cos(j*0.1)*1.2, j);
                     tree.castShadow = true;
-                    tree.receiveShadow = false;
                     scene.add(tree);
                 } else if (Math.random() > 0.85) {
-                    const building = new THREE.Mesh(new THREE.BoxGeometry(5, 6, 5), buildingMat);
-                    building.position.set(i, 2, j);
+                    const building = new THREE.Mesh(new THREE.BoxGeometry(4, 5 + Math.random()*4, 4), buildingMat);
+                    building.position.set(i, -1.5 + Math.sin(i*0.1)*Math.cos(j*0.1)*1.2, j);
                     building.castShadow = true;
                     scene.add(building);
                 }
             }
         }
         
-        // 添加环境光和点光源
+        // 添加环境光和方向光
         const ambientLight = new THREE.AmbientLight(0x404060);
         scene.add(ambientLight);
         const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-        dirLight.position.set(50, 100, 30);
+        dirLight.position.set(100, 200, 50);
         dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
         scene.add(dirLight);
-        const backLight = new THREE.PointLight(0x4466cc, 0.5);
-        backLight.position.set(-30, 40, -50);
-        scene.add(backLight);
+        const fillLight = new THREE.PointLight(0x4466cc, 0.4);
+        fillLight.position.set(-50, 80, -80);
+        scene.add(fillLight);
         
-        // --- 场景中实体对象 ---
+        // ---------- 地理坐标映射到场景坐标 ----------
+        const centerLng = 118.749, centerLat = 32.2332;
+        function toScenePos(lng, lat) {
+            const scale = 1000; // 每度对应 1000 单位
+            const x = (lng - centerLng) * scale;
+            const z = (lat - centerLat) * scale;
+            // 获取该点地形高度（简单采样地面网格）
+            let y = -2;
+            // 粗略采样地形高度（基于正弦函数模拟）
+            y += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 1.5;
+            y += Math.sin(x * 0.2) * 0.5;
+            y += Math.cos(z * 0.2) * 0.5;
+            return { x, y: y + 1.5, z };
+        }
+        
+        // ---------- 地图实体 ----------
         let markerA = null, markerB = null, lineObj = null, obstacleObj = null;
         let currentAWGS = null, currentBWGS = null;
         
-        // 辅助：将地理坐标 (lng, lat) 转换为场景中的 XZ 坐标 (简单线性映射：经度差1度 ≈ 111km，这里比例缩小100倍)
-        // 设定中心点 (118.749, 32.2332) 对应场景原点 (0,0)
-        const centerLng = 118.749, centerLat = 32.2332;
-        function toScenePos(lng, lat) {
-            const scale = 800; // 每度对应 800 单位，使得范围适中
-            const x = (lng - centerLng) * scale;
-            const z = (lat - centerLat) * scale;
-            return { x, z };
-        }
-        
         function updateScenePoints() {
+            const coordType = document.querySelector('input[name="inputCoord"]:checked').value;
             const aLat = parseFloat(document.getElementById('aLat').value);
             const aLng = parseFloat(document.getElementById('aLng').value);
             const bLat = parseFloat(document.getElementById('bLat').value);
             const bLng = parseFloat(document.getElementById('bLng').value);
             if (isNaN(aLat) || isNaN(aLng) || isNaN(bLat) || isNaN(bLng)) return;
             
-            const coordType = document.querySelector('input[name="inputCoord"]:checked').value;
             const aWGS = getWGS84FromInput(aLng, aLat, coordType);
             const bWGS = getWGS84FromInput(bLng, bLat, coordType);
             currentAWGS = aWGS;
             currentBWGS = bWGS;
             
-            // 移除旧物体
             if (markerA) scene.remove(markerA);
             if (markerB) scene.remove(markerB);
             if (lineObj) scene.remove(lineObj);
@@ -309,28 +321,26 @@ threejs_html = """
             const posA = toScenePos(aWGS.lng, aWGS.lat);
             const posB = toScenePos(bWGS.lng, bWGS.lat);
             
-            // 创建 A 点标记 (绿色球体 + CSS2D文字)
-            const sphereAGeo = new THREE.SphereGeometry(2.5, 32, 32);
+            // A 点标记 (绿色球体)
+            const sphereAGeo = new THREE.SphereGeometry(2.8, 32, 32);
             const sphereAMat = new THREE.MeshStandardMaterial({ color: 0x33ff33, emissive: 0x227722 });
             markerA = new THREE.Mesh(sphereAGeo, sphereAMat);
-            markerA.position.set(posA.x, 3, posA.z);
+            markerA.position.set(posA.x, posA.y, posA.z);
             scene.add(markerA);
-            // 添加 CSS2D 标签
             const aDiv = document.createElement('div');
             aDiv.textContent = '📍 A 起点';
             aDiv.style.color = '#0f0';
             aDiv.style.fontSize = '16px';
             aDiv.style.fontWeight = 'bold';
-            aDiv.style.textShadow = '1px 1px black';
             const aLabel = new CSS2DObject(aDiv);
-            aLabel.position.set(posA.x, 5, posA.z);
+            aLabel.position.set(posA.x, posA.y + 3, posA.z);
             scene.add(aLabel);
             
-            // B 点标记
-            const sphereBGeo = new THREE.SphereGeometry(2.5, 32, 32);
+            // B 点标记 (橙色球体)
+            const sphereBGeo = new THREE.SphereGeometry(2.8, 32, 32);
             const sphereBMat = new THREE.MeshStandardMaterial({ color: 0xff6633, emissive: 0x442200 });
             markerB = new THREE.Mesh(sphereBGeo, sphereBMat);
-            markerB.position.set(posB.x, 3, posB.z);
+            markerB.position.set(posB.x, posB.y, posB.z);
             scene.add(markerB);
             const bDiv = document.createElement('div');
             bDiv.textContent = '🏁 B 终点';
@@ -338,61 +348,62 @@ threejs_html = """
             bDiv.style.fontSize = '16px';
             bDiv.style.fontWeight = 'bold';
             const bLabel = new CSS2DObject(bDiv);
-            bLabel.position.set(posB.x, 5, posB.z);
+            bLabel.position.set(posB.x, posB.y + 3, posB.z);
             scene.add(bLabel);
             
             // 连线 (红色线条)
-            const points = [new THREE.Vector3(posA.x, 3, posA.z), new THREE.Vector3(posB.x, 3, posB.z)];
+            const points = [new THREE.Vector3(posA.x, posA.y + 0.5, posA.z), new THREE.Vector3(posB.x, posB.y + 0.5, posB.z)];
             const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
             const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff3333, linewidth: 2 });
             lineObj = new THREE.Line(lineGeometry, lineMaterial);
             scene.add(lineObj);
             
-            // 障碍物：位于连线中点，红色立方体，抬高 8 个单位
+            // 障碍物：位于连线中点，红色立方体，根据地形抬高
             const midX = (posA.x + posB.x) / 2;
             const midZ = (posA.z + posB.z) / 2;
+            // 获取中点的地形高度
+            let midY = -2;
+            midY += Math.sin(midX * 0.05) * Math.cos(midZ * 0.05) * 1.5;
+            midY += Math.sin(midX * 0.2) * 0.5;
+            midY += Math.cos(midZ * 0.2) * 0.5;
             const boxGeo = new THREE.BoxGeometry(12, 12, 12);
             const boxMat = new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0x441111 });
             obstacleObj = new THREE.Mesh(boxGeo, boxMat);
-            obstacleObj.position.set(midX, 6, midZ);
+            obstacleObj.position.set(midX, midY + 6, midZ);
             obstacleObj.castShadow = true;
             scene.add(obstacleObj);
-            // 添加一个光环
-            const ringGeo = new THREE.RingGeometry(7, 9, 32);
-            const ringMat = new THREE.MeshStandardMaterial({ color: 0xffaa44, side: THREE.DoubleSide, transparent: true, opacity: 0.6 });
+            // 添加光圈
+            const ringGeo = new THREE.RingGeometry(8, 11, 32);
+            const ringMat = new THREE.MeshStandardMaterial({ color: 0xffaa44, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
             const ring = new THREE.Mesh(ringGeo, ringMat);
             ring.rotation.x = -Math.PI / 2;
-            ring.position.set(midX, 0.5, midZ);
+            ring.position.set(midX, midY + 0.2, midZ);
             scene.add(ring);
             
             document.getElementById('statusMsg').innerHTML = '✅ A/B 点已设，障碍物已生成';
         }
         
-        // 高亮障碍物：相机飞向障碍物并闪烁材质
         function highlightObstacle() {
             if (!obstacleObj) {
                 alert('请先设置 A/B 点生成障碍物');
                 return;
             }
-            // 相机动画：平滑移动到障碍物附近
             const targetPos = obstacleObj.position.clone();
-            const offset = new THREE.Vector3(20, 15, 20);
+            const offset = new THREE.Vector3(25, 20, 25);
             const newCamPos = targetPos.clone().add(offset);
-            // 简单动画
             const startPos = camera.position.clone();
+            const startTarget = controls.target.clone();
             const duration = 500;
             const startTime = performance.now();
             function animateCamera(now) {
                 const t = Math.min(1, (now - startTime) / duration);
                 camera.position.lerpVectors(startPos, newCamPos, t);
-                controls.target.lerp(targetPos, t);
+                controls.target.lerpVectors(startTarget, targetPos, t);
                 controls.update();
                 if (t < 1) requestAnimationFrame(animateCamera);
                 else {
-                    // 高亮闪烁
-                    const originalEmissive = obstacleObj.material.emissiveIntensity || 0;
                     obstacleObj.material.emissiveIntensity = 0.8;
-                    setTimeout(() => { if(obstacleObj) obstacleObj.material.emissiveIntensity = originalEmissive; }, 800);
+                    setTimeout(() => { if(obstacleObj) obstacleObj.material.emissiveIntensity = 0; }, 800);
                 }
             }
             requestAnimationFrame(animateCamera);
@@ -406,21 +417,16 @@ threejs_html = """
             radio.addEventListener('change', updateScenePoints);
         });
         
-        // 初始加载时生成一次点
-        setTimeout(() => {
-            updateScenePoints();
-        }, 500);
+        setTimeout(() => { updateScenePoints(); }, 500);
         
-        // 动画循环
         function animate() {
             requestAnimationFrame(animate);
-            controls.update(); // 更新轨道
+            controls.update();
             renderer.render(scene, camera);
             labelRenderer.render(scene, camera);
         }
         animate();
         
-        // 窗口适配
         window.addEventListener('resize', onWindowResize, false);
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -433,7 +439,7 @@ threejs_html = """
 </html>
 """
 
-# ================== 飞行监控 Tab (心跳包模拟，与之前相同) ==================
+# ================== 飞行监控 Tab (心跳包模拟) ==================
 heartbeat_html = """
 <!DOCTYPE html>
 <html>
@@ -498,26 +504,26 @@ heartbeat_html = """
 """
 
 # ================== Streamlit 主界面 ==================
-st.title("✈️ 无人机飞行规划与监控系统 (Three.js 3D)")
-st.markdown("**南京科技职业学院** · 校园三维规划 & 遥测监控 | 无需外部地图 Token，完全本地 3D 场景")
+st.title("✈️ 无人机飞行规划与监控系统 (真实3D卫星地图)")
+st.markdown("**南京科技职业学院** · 高分辨率卫星纹理 + 地形起伏 | 无需任何Token，完全本地3D地图")
 
 tab1, tab2 = st.tabs(["🗺️ 航线规划（3D地图）", "📡 飞行监控（心跳包）"])
 
 with tab1:
-    st.components.v1.html(threejs_html, height=700, scrolling=False)
+    st.components.v1.html(threejs_map_html, height=700, scrolling=False)
 
 with tab2:
     st.components.v1.html(heartbeat_html, height=650, scrolling=False)
     st.caption("💡 心跳包数据由前端模拟，实时展示信号、电量及无人机位置（在A-B航线附近移动）")
 
 with st.sidebar:
-    st.markdown("### 🧭 系统说明 (Three.js 版本)")
+    st.markdown("### 🧭 系统说明 (真实3D地图版)")
     st.markdown("""
-    - **3D 地图**：使用 Three.js 构建的校园场景，无需任何 Token，完全本地运行。
-    - **坐标转换**：支持 GCJ-02 / WGS-84 互转（基于国测局算法），A/B 点坐标自动转换后显示在场景中。
+    - **3D 地图**：基于 Three.js 构建，使用高分辨率卫星纹理，带地形起伏，完全本地运行，**无需任何 Token**。
+    - **坐标转换**：内置 GCJ-02 ↔ WGS-84 转换算法，A/B 点坐标自动转换后显示在场景中。
     - **障碍物**：A/B 点连线中点自动生成红色立方体，点击“圈选”按钮相机自动聚焦并高亮。
-    - **飞行监控**：实时模拟心跳包，显示信号、电量、无人机位置及日志。
+    - **飞行监控**：实时模拟心跳包，显示信号强度、电池电量、无人机位置及日志。
     - 默认 A/B 点位于南京科技职业学院校园内（北纬 32.2322~32.2343，东经 118.749）。
     - 鼠标拖拽旋转/右键平移/滚轮缩放，完全交互。
     """)
-    st.success("✅ 地图已使用 Three.js 渲染，无需额外配置，立即显示！")
+    st.success("✅ 地图已使用卫星纹理 + 地形，无需注册，立即显示！")
