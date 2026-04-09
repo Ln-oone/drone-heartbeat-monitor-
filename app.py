@@ -1,12 +1,12 @@
 import streamlit as st
 
 st.set_page_config(
-    page_title="无人机飞行规划与监控系统 - 真实3D地图",
+    page_title="无人机飞行规划与监控系统",
     page_icon="✈️",
     layout="wide"
 )
 
-# ================== 使用 Three.js 构建的“真实风格”3D 地图（卫星纹理，无令牌） ==================
+# ================== 航线规划：3D 真实风格地图（Three.js + 卫星纹理）==================
 threejs_map_html = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -145,9 +145,8 @@ threejs_map_html = """
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
-        // ---------- 坐标转换（GCJ-02 转 WGS-84）----------
+        // ---------- 坐标转换：GCJ-02 转 WGS-84 (国测局算法) ----------
         function transformGCJ2WGS(lng, lat) {
-            // 基于国测局算法实现（简化但准确）
             const a = 6378245.0;
             const ee = 0.006693421622965943;
             function transformLat(x, y) {
@@ -172,20 +171,15 @@ threejs_map_html = """
             let sqrtMagic = Math.sqrt(magic);
             dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
             dLng = (dLng * 180.0) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
-            let wgsLat = lat - dLat;
-            let wgsLng = lng - dLng;
-            return { lng: wgsLng, lat: wgsLat };
+            return { lng: lng - dLng, lat: lat - dLat };
         }
 
         function getWGS84FromInput(lng, lat, type) {
-            if (type === 'GCJ02') {
-                return transformGCJ2WGS(lng, lat);
-            } else {
-                return { lng, lat };
-            }
+            if (type === 'GCJ02') return transformGCJ2WGS(lng, lat);
+            return { lng, lat };
         }
 
-        // ---------- 场景初始化 ----------
+        // ---------- Three.js 场景初始化 ----------
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x071a3b);
         scene.fog = new THREE.Fog(0x071a3b, 800, 2000);
@@ -214,61 +208,73 @@ threejs_map_html = """
         controls.rotateSpeed = 1.0;
         controls.maxPolarAngle = Math.PI / 2.2;
 
-        // ---------- 创建“真实地图”地面：高分辨率卫星纹理 + 地形起伏网格 ----------
-        // 使用一张高分辨率卫星图（来自开放资源，无版权问题，仅用于教学）
+        // ---------- 创建真实风格的地面：高分辨率卫星纹理 + 地形起伏 ----------
         const textureLoader = new THREE.TextureLoader();
-        // 加载卫星纹理（高分辨率，来自 NASA 可见地球影像）
+        // 使用一张高质量的全球卫星影像（来自 Three.js 示例，可公开访问）
         const satelliteTexture = textureLoader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg');
         satelliteTexture.wrapS = THREE.RepeatWrapping;
         satelliteTexture.wrapT = THREE.RepeatWrapping;
-        satelliteTexture.repeat.set(4, 4); // 重复纹理使地面更丰富
-        
-        const groundGeometry = new THREE.PlaneGeometry(600, 600, 128, 128);
-        const groundMaterial = new THREE.MeshStandardMaterial({ map: satelliteTexture, roughness: 0.7, metalness: 0.1 });
+        satelliteTexture.repeat.set(3, 3);  // 重复纹理使地面细节更丰富
+
+        const width = 800;
+        const depth = 800;
+        const segments = 180;
+        const groundGeometry = new THREE.PlaneGeometry(width, depth, segments, segments);
+        // 修改顶点 Y 坐标产生地形起伏
+        const positions = groundGeometry.attributes.position.array;
+        for (let i = 0; i < positions.length; i += 3) {
+            const x = positions[i];
+            const z = positions[i+2];
+            // 使用多个正弦余弦叠加，模拟自然地形
+            let y = Math.sin(x * 0.03) * Math.cos(z * 0.03) * 2.0;
+            y += Math.sin(x * 0.1) * 0.8;
+            y += Math.cos(z * 0.1) * 0.8;
+            y += Math.sin((x * 0.2 + z * 0.15) * 1.5) * 0.5;
+            positions[i+1] = y;
+        }
+        groundGeometry.computeVertexNormals(); // 更新法线以得到正确光照
+
+        const groundMaterial = new THREE.MeshStandardMaterial({ map: satelliteTexture, roughness: 0.6, metalness: 0.1 });
         const ground = new THREE.Mesh(groundGeometry, groundMaterial);
         ground.rotation.x = -Math.PI / 2;
         ground.position.y = -2;
         ground.receiveShadow = true;
         scene.add(ground);
-        
-        // 添加简单的地形起伏（通过修改顶点Y坐标）
-        const positions = groundGeometry.attributes.position.array;
-        for (let i = 0; i < positions.length; i += 3) {
-            const x = positions[i];
-            const z = positions[i+2];
-            // 使用正弦余弦生成自然起伏
-            let y = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 1.5;
-            y += Math.sin(x * 0.2) * 0.5;
-            y += Math.cos(z * 0.2) * 0.5;
-            positions[i+1] = y;
-        }
-        groundGeometry.computeVertexNormals(); // 更新法线以正确光照
-        
-        // 添加网格辅助线（可选）
-        const gridHelper = new THREE.GridHelper(600, 30, 0x88aaff, 0x335588);
-        gridHelper.position.y = -1.8;
+
+        // 添加辅助网格线（半透明，帮助定位）
+        const gridHelper = new THREE.GridHelper(700, 30, 0x88aaff, 0x335588);
+        gridHelper.position.y = -1.5;
         scene.add(gridHelper);
-        
-        // 添加一些树木和建筑来丰富场景（示意）
+
+        // 随机添加一些树木和建筑物来丰富场景（示意，不影响障碍物功能）
         const treeMat = new THREE.MeshStandardMaterial({ color: 0x5c9e5e });
         const buildingMat = new THREE.MeshStandardMaterial({ color: 0xcd9575 });
-        for (let i = -250; i <= 250; i += 35) {
-            for (let j = -250; j <= 250; j += 35) {
-                if (Math.random() > 0.8) {
+        for (let i = -300; i <= 300; i += 45) {
+            for (let j = -300; j <= 300; j += 45) {
+                if (Math.random() > 0.85) {
                     const tree = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.8, 3.5, 6), treeMat);
-                    tree.position.set(i, -1 + Math.sin(i*0.1)*Math.cos(j*0.1)*1.2, j);
+                    // 获取该位置的地形高度
+                    let h = -2;
+                    h += Math.sin(i * 0.03) * Math.cos(j * 0.03) * 2.0;
+                    h += Math.sin(i * 0.1) * 0.8;
+                    h += Math.cos(j * 0.1) * 0.8;
+                    tree.position.set(i, h, j);
                     tree.castShadow = true;
                     scene.add(tree);
-                } else if (Math.random() > 0.85) {
+                } else if (Math.random() > 0.92) {
                     const building = new THREE.Mesh(new THREE.BoxGeometry(4, 5 + Math.random()*4, 4), buildingMat);
-                    building.position.set(i, -1.5 + Math.sin(i*0.1)*Math.cos(j*0.1)*1.2, j);
+                    let h = -2;
+                    h += Math.sin(i * 0.03) * Math.cos(j * 0.03) * 2.0;
+                    h += Math.sin(i * 0.1) * 0.8;
+                    h += Math.cos(j * 0.1) * 0.8;
+                    building.position.set(i, h, j);
                     building.castShadow = true;
                     scene.add(building);
                 }
             }
         }
-        
-        // 添加环境光和方向光
+
+        // 灯光系统
         const ambientLight = new THREE.AmbientLight(0x404060);
         scene.add(ambientLight);
         const dirLight = new THREE.DirectionalLight(0xffffff, 1);
@@ -280,26 +286,26 @@ threejs_map_html = """
         const fillLight = new THREE.PointLight(0x4466cc, 0.4);
         fillLight.position.set(-50, 80, -80);
         scene.add(fillLight);
-        
-        // ---------- 地理坐标映射到场景坐标 ----------
+
+        // ---------- 地理坐标 → 场景坐标映射 ----------
         const centerLng = 118.749, centerLat = 32.2332;
         function toScenePos(lng, lat) {
-            const scale = 1000; // 每度对应 1000 单位
+            const scale = 1000; // 每度 1000 单位
             const x = (lng - centerLng) * scale;
             const z = (lat - centerLat) * scale;
-            // 获取该点地形高度（简单采样地面网格）
+            // 获取该点的地形高度（与地面几何体一致）
             let y = -2;
-            // 粗略采样地形高度（基于正弦函数模拟）
-            y += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 1.5;
-            y += Math.sin(x * 0.2) * 0.5;
-            y += Math.cos(z * 0.2) * 0.5;
+            y += Math.sin(x * 0.03) * Math.cos(z * 0.03) * 2.0;
+            y += Math.sin(x * 0.1) * 0.8;
+            y += Math.cos(z * 0.1) * 0.8;
+            y += Math.sin((x * 0.2 + z * 0.15) * 1.5) * 0.5;
             return { x, y: y + 1.5, z };
         }
-        
-        // ---------- 地图实体 ----------
+
+        // ---------- 地图实体：A/B 点、连线、障碍物 ----------
         let markerA = null, markerB = null, lineObj = null, obstacleObj = null;
         let currentAWGS = null, currentBWGS = null;
-        
+
         function updateScenePoints() {
             const coordType = document.querySelector('input[name="inputCoord"]:checked').value;
             const aLat = parseFloat(document.getElementById('aLat').value);
@@ -307,21 +313,21 @@ threejs_map_html = """
             const bLat = parseFloat(document.getElementById('bLat').value);
             const bLng = parseFloat(document.getElementById('bLng').value);
             if (isNaN(aLat) || isNaN(aLng) || isNaN(bLat) || isNaN(bLng)) return;
-            
+
             const aWGS = getWGS84FromInput(aLng, aLat, coordType);
             const bWGS = getWGS84FromInput(bLng, bLat, coordType);
             currentAWGS = aWGS;
             currentBWGS = bWGS;
-            
+
             if (markerA) scene.remove(markerA);
             if (markerB) scene.remove(markerB);
             if (lineObj) scene.remove(lineObj);
             if (obstacleObj) scene.remove(obstacleObj);
-            
+
             const posA = toScenePos(aWGS.lng, aWGS.lat);
             const posB = toScenePos(bWGS.lng, bWGS.lat);
-            
-            // A 点标记 (绿色球体)
+
+            // A 点标记（绿色球体）
             const sphereAGeo = new THREE.SphereGeometry(2.8, 32, 32);
             const sphereAMat = new THREE.MeshStandardMaterial({ color: 0x33ff33, emissive: 0x227722 });
             markerA = new THREE.Mesh(sphereAGeo, sphereAMat);
@@ -335,8 +341,8 @@ threejs_map_html = """
             const aLabel = new CSS2DObject(aDiv);
             aLabel.position.set(posA.x, posA.y + 3, posA.z);
             scene.add(aLabel);
-            
-            // B 点标记 (橙色球体)
+
+            // B 点标记（橙色球体）
             const sphereBGeo = new THREE.SphereGeometry(2.8, 32, 32);
             const sphereBMat = new THREE.MeshStandardMaterial({ color: 0xff6633, emissive: 0x442200 });
             markerB = new THREE.Mesh(sphereBGeo, sphereBMat);
@@ -350,39 +356,41 @@ threejs_map_html = """
             const bLabel = new CSS2DObject(bDiv);
             bLabel.position.set(posB.x, posB.y + 3, posB.z);
             scene.add(bLabel);
-            
-            // 连线 (红色线条)
+
+            // 连线（红色线条）
             const points = [new THREE.Vector3(posA.x, posA.y + 0.5, posA.z), new THREE.Vector3(posB.x, posB.y + 0.5, posB.z)];
             const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
-            const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff3333, linewidth: 2 });
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff3333 });
             lineObj = new THREE.Line(lineGeometry, lineMaterial);
             scene.add(lineObj);
-            
-            // 障碍物：位于连线中点，红色立方体，根据地形抬高
+
+            // 障碍物：位于连线中点，红色立方体，高度 10 单位
             const midX = (posA.x + posB.x) / 2;
             const midZ = (posA.z + posB.z) / 2;
-            // 获取中点的地形高度
+            // 获取中点地形高度
             let midY = -2;
-            midY += Math.sin(midX * 0.05) * Math.cos(midZ * 0.05) * 1.5;
-            midY += Math.sin(midX * 0.2) * 0.5;
-            midY += Math.cos(midZ * 0.2) * 0.5;
+            midY += Math.sin(midX * 0.03) * Math.cos(midZ * 0.03) * 2.0;
+            midY += Math.sin(midX * 0.1) * 0.8;
+            midY += Math.cos(midZ * 0.1) * 0.8;
+            midY += Math.sin((midX * 0.2 + midZ * 0.15) * 1.5) * 0.5;
             const boxGeo = new THREE.BoxGeometry(12, 12, 12);
             const boxMat = new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0x441111 });
             obstacleObj = new THREE.Mesh(boxGeo, boxMat);
             obstacleObj.position.set(midX, midY + 6, midZ);
             obstacleObj.castShadow = true;
             scene.add(obstacleObj);
-            // 添加光圈
+
+            // 添加光圈效果
             const ringGeo = new THREE.RingGeometry(8, 11, 32);
             const ringMat = new THREE.MeshStandardMaterial({ color: 0xffaa44, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
             const ring = new THREE.Mesh(ringGeo, ringMat);
             ring.rotation.x = -Math.PI / 2;
             ring.position.set(midX, midY + 0.2, midZ);
             scene.add(ring);
-            
+
             document.getElementById('statusMsg').innerHTML = '✅ A/B 点已设，障碍物已生成';
         }
-        
+
         function highlightObstacle() {
             if (!obstacleObj) {
                 alert('请先设置 A/B 点生成障碍物');
@@ -408,17 +416,18 @@ threejs_map_html = """
             }
             requestAnimationFrame(animateCamera);
         }
-        
-        // 绑定UI事件
+
+        // 绑定 UI 事件
         document.getElementById('setABtn').addEventListener('click', updateScenePoints);
         document.getElementById('setBBtn').addEventListener('click', updateScenePoints);
         document.getElementById('highlightBtn').addEventListener('click', highlightObstacle);
         document.querySelectorAll('input[name="inputCoord"]').forEach(radio => {
             radio.addEventListener('change', updateScenePoints);
         });
-        
+
         setTimeout(() => { updateScenePoints(); }, 500);
-        
+
+        // 动画循环
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
@@ -426,7 +435,7 @@ threejs_map_html = """
             labelRenderer.render(scene, camera);
         }
         animate();
-        
+
         window.addEventListener('resize', onWindowResize, false);
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -439,7 +448,7 @@ threejs_map_html = """
 </html>
 """
 
-# ================== 飞行监控 Tab (心跳包模拟) ==================
+# ================== 飞行监控：心跳包模拟 ==================
 heartbeat_html = """
 <!DOCTYPE html>
 <html>
@@ -504,8 +513,8 @@ heartbeat_html = """
 """
 
 # ================== Streamlit 主界面 ==================
-st.title("✈️ 无人机飞行规划与监控系统 (真实3D卫星地图)")
-st.markdown("**南京科技职业学院** · 高分辨率卫星纹理 + 地形起伏 | 无需任何Token，完全本地3D地图")
+st.title("✈️ 无人机飞行规划与监控系统")
+st.markdown("**南京科技职业学院** · 高分辨率卫星纹理 + 地形起伏 | 无需任何 Token，完全本地 3D 地图")
 
 tab1, tab2 = st.tabs(["🗺️ 航线规划（3D地图）", "📡 飞行监控（心跳包）"])
 
@@ -514,16 +523,16 @@ with tab1:
 
 with tab2:
     st.components.v1.html(heartbeat_html, height=650, scrolling=False)
-    st.caption("💡 心跳包数据由前端模拟，实时展示信号、电量及无人机位置（在A-B航线附近移动）")
+    st.caption("💡 心跳包数据由前端模拟，实时展示信号、电量及无人机位置（在 A-B 航线附近移动）")
 
 with st.sidebar:
-    st.markdown("### 🧭 系统说明 (真实3D地图版)")
+    st.markdown("### 🧭 系统说明")
     st.markdown("""
-    - **3D 地图**：基于 Three.js 构建，使用高分辨率卫星纹理，带地形起伏，完全本地运行，**无需任何 Token**。
+    - **3D 地图**：基于 Three.js，使用高分辨率卫星纹理 + 真实感地形起伏，完全本地运行，**无需任何 Token**。
     - **坐标转换**：内置 GCJ-02 ↔ WGS-84 转换算法，A/B 点坐标自动转换后显示在场景中。
     - **障碍物**：A/B 点连线中点自动生成红色立方体，点击“圈选”按钮相机自动聚焦并高亮。
     - **飞行监控**：实时模拟心跳包，显示信号强度、电池电量、无人机位置及日志。
     - 默认 A/B 点位于南京科技职业学院校园内（北纬 32.2322~32.2343，东经 118.749）。
     - 鼠标拖拽旋转/右键平移/滚轮缩放，完全交互。
     """)
-    st.success("✅ 地图已使用卫星纹理 + 地形，无需注册，立即显示！")
+    st.success("✅ 地图已加载，无需注册，立即使用！")
