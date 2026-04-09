@@ -2,22 +2,22 @@ import streamlit as st
 
 st.set_page_config(page_title="无人机飞行规划与监控系统", page_icon="✈️", layout="wide")
 
-# 高德地图 HTML 组件（3D视图，支持坐标转换，AB点，障碍物）
-amap_html = """
+# 高德卫星地图 HTML（3D，支持倾斜/旋转，坐标转换，AB点，障碍物）
+amap_satellite_html = """
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高德3D地图</title>
+    <title>高德卫星地图 - 3D航线规划</title>
     <style>
         body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
-        #container { width: 100%; height: 600px; }
+        #container { width: 100%; height: 100%; }
         .control-panel {
             position: absolute;
             top: 20px;
             right: 20px;
-            width: 280px;
+            width: 290px;
             background: rgba(0,0,0,0.75);
             backdrop-filter: blur(8px);
             border-radius: 12px;
@@ -35,25 +35,30 @@ amap_html = """
         .input-group { display: flex; gap: 8px; margin-bottom: 8px; }
         .input-group input { flex: 1; background: #1e1e2a; border: 1px solid #3b82f6; padding: 6px; border-radius: 6px; color: white; }
         button { background: #3b82f6; border: none; padding: 6px; border-radius: 20px; color: white; cursor: pointer; width: 100%; margin-top: 5px; }
+        button.obstacle-btn { background: #a855f7; }
         .coord-radio { display: flex; gap: 15px; margin: 8px 0; }
         .status { font-size: 12px; text-align: center; margin-top: 8px; color: #aaf; }
         .note { font-size: 11px; text-align: center; margin-top: 10px; color: #ccc; }
     </style>
-    <!-- 引入高德地图 JS API -->
+    <!-- 高德地图安全密钥配置 -->
+    <script type="text/javascript">
+        window._AMapSecurityConfig = {
+            securityJsCode: 'YOUR_SECURITY_KEY'   // 替换为您的安全密钥
+        };
+    </script>
+    <!-- 引入高德地图 JS API，替换 key -->
     <script src="https://webapi.amap.com/maps?v=2.0&key=17bf012d2daaa0963ed83efdcf079fa0"></script>
-    <!-- 引入高德地图 UI 组件库（可选） -->
-    <script src="https://webapi.amap.com/ui/1.1/main.js"></script>
 </head>
 <body>
 <div id="container"></div>
 <div class="control-panel">
-    <h3>🗺️ 高德3D地图 · 航线规划</h3>
+    <h3>🗺️ 高德卫星3D地图 · 航线规划</h3>
     <div class="section">
         <div class="coord-radio" id="coordSysGroup">
             <label><input type="radio" name="coord" value="GCJ02" checked> GCJ-02 (高德/百度)</label>
             <label><input type="radio" name="coord" value="WGS84"> WGS-84</label>
         </div>
-        <div class="note">注：高德地图使用 GCJ-02 坐标系，输入WGS84坐标会自动转换</div>
+        <div class="note">注：高德地图使用 GCJ-02，输入WGS84会自动转换</div>
     </div>
     <div class="section">
         <div>📍 起点 A (校园内)</div>
@@ -73,21 +78,21 @@ amap_html = """
     </div>
     <div class="section">
         <div>🧱 障碍物</div>
-        <button id="highlightBtn" style="background:#a855f7;">🔍 圈选 / 高亮障碍物</button>
+        <button id="highlightBtn" class="obstacle-btn">🔍 圈选 / 高亮障碍物</button>
         <div class="status" id="statusMsg">⚪ 未设置 A/B 点</div>
     </div>
-    <div class="note">💡 支持鼠标拖拽/右键旋转/滚轮缩放 | 红色立方体为障碍物</div>
+    <div class="note">💡 鼠标拖拽旋转 / 右键平移 / 滚轮缩放 | 红色方块为障碍物</div>
 </div>
 
 <script>
-    // 初始化地图（3D视图）
-    let map = new AMap.Map('container', {
+    // 初始化卫星地图（3D视图）
+    var map = new AMap.Map('container', {
         center: [118.749, 32.2332],   // 南京科技职业学院
-        zoom: 17,
-        pitch: 65,                     // 倾斜角度（3D效果）
-        viewMode: '3D',                // 3D视图
-        layers: [new AMap.TileLayer.Satellite()],   // 添加这一行，使用卫星图层
-        building: true,               // 显示3D建筑物
+        zoom: 18,
+        pitch: 65,                    // 倾斜角度（3D效果）
+        viewMode: '3D',               // 3D视图
+        layers: [new AMap.TileLayer.Satellite()],  // 使用卫星图层
+        building: true,               // 显示3D建筑物（卫星图下可能不明显，但保留）
         showIndoorMap: false
     });
     
@@ -96,19 +101,9 @@ amap_html = """
     map.addControl(new AMap.ToolBar({ position: 'RT' }));
     map.addControl(new AMap.ControlBar({ position: 'RB' }));  // 3D旋转控件
     
-    // 坐标转换辅助（WGS84 -> GCJ02，因为高德地图使用GCJ02）
+    // ---------- 坐标转换：WGS84 -> GCJ02（高德地图使用GCJ02）----------
     function wgs84ToGcj02(lng, lat) {
-        // 使用高德自带的坐标转换工具（如果可用）
-        if (typeof AMap.GeometryUtil !== 'undefined' && AMap.GeometryUtil.gcj02ToWGS84) {
-            // 注意：高德工具一般是 GCJ02 -> WGS84，我们需要逆转换。这里使用简单偏移法（中国境内近似）
-            // 为了准确，我们直接调用高德转换服务？但需要 key。为了演示，使用开源转换函数（与之前一致）
-        }
-        // 开源转换函数（从 GCJ-02 转 WGS84 的逆过程，简化为加偏移）
-        // 由于高德地图本身就是 GCJ-02，如果用户输入的是 WGS84，我们需要将 WGS84 转成 GCJ02 才能正确显示位置。
-        // 这里使用一个简化的反向转换（实际应该用精确算法，但为了演示，直接用之前 GCJ02->WGS84 的逆）
-        // 更可靠：使用 coordtransform 库？但我们不额外引入。下面提供精确转换（基于国测局算法逆推）。
-        // 为了代码简洁，我们直接使用一个已有的在线转换函数（从 WGS84 转 GCJ02）。
-        // 这里引入一个精简但准确的转换库（内置）
+        // 精确转换函数（国测局算法）
         function outOfChina(lng, lat) {
             return (lng < 72.004 || lng > 137.8347) || (lat < 0.8293 || lat > 55.8271);
         }
@@ -135,12 +130,10 @@ amap_html = """
         let sqrtMagic = Math.sqrt(magic);
         dLat = (dLat * 180.0) / ((6378245.0 * (1 - 0.006693421622965943)) / (magic * sqrtMagic) * Math.PI);
         dLng = (dLng * 180.0) / (6378245.0 / sqrtMagic * Math.cos(radLat) * Math.PI);
-        let mgLat = lat + dLat;
-        let mgLng = lng + dLng;
-        return { lng: mgLng, lat: mgLat };
+        return { lng: lng + dLng, lat: lat + dLat };
     }
     
-    // 获取用户输入的坐标（根据坐标系类型返回 GCJ02 坐标，因为高德地图使用 GCJ02）
+    // 获取用户输入坐标（转换为高德使用的GCJ02坐标）
     function getMapCoords() {
         let coordType = document.querySelector('input[name="coord"]:checked').value;
         let aLat = parseFloat(document.getElementById('aLat').value);
@@ -157,15 +150,13 @@ amap_html = """
     }
     
     // 存储地图覆盖物
-    let markerA = null, markerB = null, polyline = null, obstacleMarker = null;
+    let markerA = null, markerB = null, polyline = null, obstacleMarker = null, obstacleLabel = null;
     
-    // 创建障碍物（红色立方体，使用自定义覆盖物，高德没有原生3D立方体，用 Marker 模拟+CSS或者用 Polygon 拉伸）
-    // 为了效果，我们在中点添加一个红色3D柱状体（使用 AMap.Object3D 或简单添加一个圆形标记+图标）
-    // 简单起见：添加一个圆形标记并显示红色方块，并添加一个 CSS 样式模拟立方体。
-    // 更直观：使用海量点或者添加一个自定义图层。为了满足“障碍物圈选”，我们用一个醒目的红色标记+光圈。
+    // 创建障碍物（红色方块+标签）
     function createObstacle(lnglat) {
         if (obstacleMarker) map.remove(obstacleMarker);
-        // 创建自定义内容 div 模拟立方体
+        if (obstacleLabel) map.remove(obstacleLabel);
+        // 自定义红色方块内容
         let content = '<div style="width: 30px; height: 30px; background-color: #ff0000; border: 2px solid yellow; border-radius: 4px; box-shadow: 0 0 15px red;"></div>';
         obstacleMarker = new AMap.Marker({
             position: lnglat,
@@ -174,14 +165,13 @@ amap_html = """
             title: "障碍物"
         });
         map.add(obstacleMarker);
-        // 添加一个文本标签
-        let labelMarker = new AMap.Marker({
+        // 添加文字标签
+        obstacleLabel = new AMap.Marker({
             position: lnglat,
             content: '<div style="color: white; background: black; padding: 2px 6px; border-radius: 12px; font-size: 12px;">🚧 障碍物</div>',
             offset: new AMap.Pixel(-30, -40)
         });
-        map.add(labelMarker);
-        obstacleMarker.label = labelMarker;
+        map.add(obstacleLabel);
     }
     
     function updateMap() {
@@ -194,49 +184,52 @@ amap_html = """
         if (polyline) map.remove(polyline);
         if (obstacleMarker) {
             map.remove(obstacleMarker);
-            if (obstacleMarker.label) map.remove(obstacleMarker.label);
+            if (obstacleLabel) map.remove(obstacleLabel);
         }
         
+        // A点标记（绿色图标）
         markerA = new AMap.Marker({ position: aPos, title: "A 起点", icon: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_b.png', offset: new AMap.Pixel(-13, -30) });
         markerB = new AMap.Marker({ position: bPos, title: "B 终点", icon: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png', offset: new AMap.Pixel(-13, -30) });
         map.add([markerA, markerB]);
         
-        // 连线
-        polyline = new AMap.Polyline({ path: [aPos, bPos], strokeColor: "#ff3333", strokeWeight: 5, strokeOpacity: 0.8 });
+        // 连线（红色）
+        polyline = new AMap.Polyline({ path: [aPos, bPos], strokeColor: "#ff3333", strokeWeight: 5, strokeOpacity: 0.9 });
         map.add(polyline);
         
-        // 障碍物位于中点
+        // 障碍物位于连线中点
         let midLng = (aPos[0] + bPos[0]) / 2;
         let midLat = (aPos[1] + bPos[1]) / 2;
         createObstacle([midLng, midLat]);
         
         document.getElementById('statusMsg').innerHTML = '✅ A/B 点已设，障碍物已生成';
-        // 调整视野到合适范围
+        // 自动调整视野
         map.setFitView([markerA, markerB, obstacleMarker]);
     }
     
     function highlightObstacle() {
-        if (!obstacleMarker) { alert("请先设置A/B点生成障碍物"); return; }
-        map.setZoomAndCenter(18, obstacleMarker.getPosition());
+        if (!obstacleMarker) { alert("请先设置 A/B 点生成障碍物"); return; }
+        map.setZoomAndCenter(19, obstacleMarker.getPosition());
         // 闪烁效果
         let el = obstacleMarker.getContent();
         let originalBg = el.style.backgroundColor;
         el.style.backgroundColor = "#ffff00";
-        setTimeout(() => { el.style.backgroundColor = originalBg; }, 800);
+        setTimeout(() => { if(obstacleMarker) el.style.backgroundColor = originalBg; }, 800);
     }
     
+    // 绑定事件
     document.getElementById('setABtn').addEventListener('click', updateMap);
     document.getElementById('setBBtn').addEventListener('click', updateMap);
     document.getElementById('highlightBtn').addEventListener('click', highlightObstacle);
     document.querySelectorAll('input[name="coord"]').forEach(radio => radio.addEventListener('change', updateMap));
     
+    // 延迟确保地图完全加载后初始化点
     setTimeout(updateMap, 1000);
 </script>
 </body>
 </html>
-""".replace("YOUR_AMAP_KEY", st.secrets.get("AMAP_KEY", "YOUR_AMAP_KEY"))  # 若在Streamlit Cloud可用secrets
+""".replace("YOUR_AMAP_KEY", "替换成您的Web端Key").replace("YOUR_SECURITY_KEY", "替换成您的安全密钥")
 
-# 心跳包监控（与之前相同，略作美化）
+# 飞行监控（心跳包模拟）
 heartbeat_html = """
 <!DOCTYPE html>
 <html>
@@ -245,23 +238,26 @@ heartbeat_html = """
     <title>心跳包监控</title>
     <style>
         body { background: #0b0f17; font-family: monospace; padding: 20px; color: #eef2ff; }
-        .stats { display: flex; gap: 20px; margin-bottom: 25px; }
+        .stats { display: flex; gap: 20px; margin-bottom: 25px; flex-wrap: wrap; }
         .stat-card { background: #1e293b; border-radius: 20px; padding: 15px; flex:1; text-align: center; border-left: 4px solid #3b82f6; }
         .stat-value { font-size: 28px; font-weight: bold; color: #facc15; }
         .log-area { background: #0a0e16; border-radius: 20px; padding: 15px; height: 55vh; overflow-y: auto; }
         .log-entry { border-left: 3px solid #3b82f6; padding: 8px; margin: 8px 0; background: #111827; border-radius: 12px; }
-        button { background: #2c3e66; border: none; padding: 8px 20px; border-radius: 40px; color: white; cursor: pointer; }
+        button { background: #2c3e66; border: none; padding: 8px 20px; border-radius: 40px; color: white; cursor: pointer; margin-top: 15px; }
+        h2 { margin-top: 0; }
     </style>
 </head>
 <body>
-<h2>📡 实时心跳数据流 (模拟无人机遥测)</h2>
-<div class="stats">
-    <div class="stat-card"><div>📶 信号强度</div><div class="stat-value" id="signalValue">-52 dBm</div></div>
-    <div class="stat-card"><div>🔋 电池电量</div><div class="stat-value" id="batteryValue">98%</div></div>
-    <div class="stat-card"><div>📍 无人机位置</div><div class="stat-value" id="posValue" style="font-size: 16px;">等待定位</div></div>
+<div style="max-width: 1000px; margin: 0 auto;">
+    <h2>📡 实时心跳数据流 (模拟无人机遥测)</h2>
+    <div class="stats">
+        <div class="stat-card"><div>📶 信号强度</div><div class="stat-value" id="signalValue">-52 dBm</div></div>
+        <div class="stat-card"><div>🔋 电池电量</div><div class="stat-value" id="batteryValue">98%</div></div>
+        <div class="stat-card"><div>📍 无人机位置</div><div class="stat-value" id="posValue" style="font-size: 16px;">等待定位</div></div>
+    </div>
+    <div style="text-align: right;"><button id="clearLogBtn">清空日志</button></div>
+    <div class="log-area" id="logArea"><div class="log-entry">✨ 心跳监控已启动，等待数据包...</div></div>
 </div>
-<button id="clearLogBtn">清空日志</button>
-<div class="log-area" id="logArea"><div class="log-entry">✨ 心跳监控已启动...</div></div>
 <script>
     let seq = 1, interval;
     const aLat=32.2322, aLng=118.749, bLat=32.2343, bLng=118.749;
@@ -294,23 +290,25 @@ heartbeat_html = """
 </html>
 """
 
-st.title("✈️ 无人机飞行规划与监控系统 (高德3D地图)")
-st.markdown("**南京科技职业学院** · 真实卫星/矢量地图 | 支持3D倾斜、旋转")
-tab1, tab2 = st.tabs(["🗺️ 航线规划（高德3D地图）", "📡 飞行监控（心跳包）"])
+st.title("✈️ 无人机飞行规划与监控系统 (高德卫星3D地图)")
+st.markdown("**南京科技职业学院** · 真实卫星影像 + 3D地形 | 支持鼠标拖拽/右键旋转/滚轮缩放")
+
+tab1, tab2 = st.tabs(["🗺️ 航线规划（高德卫星3D地图）", "📡 飞行监控（心跳包）"])
 
 with tab1:
-    st.components.v1.html(amap_html, height=700)
+    st.components.v1.html(amap_satellite_html, height=700, scrolling=False)
+
 with tab2:
-    st.components.v1.html(heartbeat_html, height=650)
+    st.components.v1.html(heartbeat_html, height=650, scrolling=False)
 
 with st.sidebar:
-    st.markdown("### 📌 使用说明")
+    st.markdown("### 🧭 使用说明")
     st.markdown("""
-    - **地图**：使用高德地图 JS API，真实卫星/矢量图，支持 3D 倾斜、旋转。
-    - **坐标转换**：自动处理 WGS-84 与 GCJ-02 转换，确保标记位置准确。
-    - **A/B 点**：输入经纬度后点击设置，地图上生成标记和连线。
+    - **地图**：高德卫星影像，3D视图，支持倾斜、旋转。
+    - **坐标转换**：自动处理 WGS-84 ↔ GCJ-02，确保标记准确。
+    - **A/B点**：输入经纬度后点击设置，地图上生成标记和红色连线。
     - **障碍物**：自动生成于连线中点，红色方块，点击“圈选”按钮聚焦高亮。
     - **心跳包**：在“飞行监控”标签页实时模拟。
-    - **需要高德 Key**：请按第一步免费申请并替换代码中的 `YOUR_AMAP_KEY`。
+    - **卫星图加载稍慢**，请耐心等待几秒。
     """)
-    st.info("💡 提示：如果没有申请 Key，地图无法显示。申请后刷新页面即可。")
+    st.success("✅ 确保已替换代码中的 Key 和安全密钥")
