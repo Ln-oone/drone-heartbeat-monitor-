@@ -195,8 +195,8 @@ def create_planning_map(center_lat, center_lng, points, obstacles_geojson, fligh
     m = folium.Map(
         location=[center_lat, center_lng], 
         zoom_start=16, 
-        tiles="OpenStreetMap",
-        attr="Google Satellite"
+        tiles="https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+        attr="高德卫星地图"
     )
     
     # 添加障碍物多边形
@@ -422,8 +422,8 @@ def main():
             monitor_map = folium.Map(
                 location=[latest['lat'], latest['lng']],
                 zoom_start=17,
-                tiles="OpenStreetMap",
-                attr="Google Satellite"
+                tiles="https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+                attr="高德卫星地图"
             )
             
             # 绘制完整轨迹
@@ -545,8 +545,8 @@ def main():
             obs_map = folium.Map(
                 location=[SCHOOL_CENTER_WGS84[1], SCHOOL_CENTER_WGS84[0]],
                 zoom_start=16,
-                tiles="OpenStreetMap",
-                attr="Google Satellite"
+                tiles="https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
+                attr="高德卫星地图"
             )
             
             if obstacles_geojson.get("features"):
