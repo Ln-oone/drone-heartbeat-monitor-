@@ -195,7 +195,7 @@ def create_planning_map(center_lat, center_lng, points, obstacles_geojson, fligh
     m = folium.Map(
         location=[center_lat, center_lng], 
         zoom_start=16, 
-        tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        tiles="OpenStreetMap",
         attr="Google Satellite"
     )
     
@@ -422,7 +422,7 @@ def main():
             monitor_map = folium.Map(
                 location=[latest['lat'], latest['lng']],
                 zoom_start=17,
-                tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+                tiles="OpenStreetMap",
                 attr="Google Satellite"
             )
             
@@ -545,7 +545,7 @@ def main():
             obs_map = folium.Map(
                 location=[SCHOOL_CENTER_WGS84[1], SCHOOL_CENTER_WGS84[0]],
                 zoom_start=16,
-                tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+                tiles="OpenStreetMap",
                 attr="Google Satellite"
             )
             
