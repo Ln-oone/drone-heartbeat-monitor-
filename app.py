@@ -14,12 +14,11 @@ import pandas as pd
 st.set_page_config(page_title="无人机地面站系统 - 南京科技职业学院", layout="wide")
 
 # ==================== 南京科技职业学院真实坐标 (GCJ-02) ====================
-# 学校正门坐标（从高德地图获取）
-SCHOOL_CENTER_GCJ = [118.6965, 32.2015]  # [经度, 纬度]
+SCHOOL_CENTER_GCJ = [118.6965, 32.2015]
 
-# A点 (学校南门附近) B点 (北门附近) - GCJ-02 坐标
-DEFAULT_A_GCJ = [118.6960, 32.2005]   # 南门区域
-DEFAULT_B_GCJ = [118.6968, 32.2030]   # 北门区域
+# A点 (南门附近) B点 (北门附近)
+DEFAULT_A_GCJ = [118.6960, 32.2005]
+DEFAULT_B_GCJ = [118.6968, 32.2030]
 
 # ==================== 配置文件路径 ====================
 CONFIG_FILE = "obstacle_config.json"
@@ -101,6 +100,26 @@ def save_obstacles_to_file(obstacles):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+# ==================== 安全获取多边形坐标 ====================
+def get_polygon_coords(polygon_data):
+    """安全获取多边形坐标，统一转换为 [[lng, lat], ...] 格式"""
+    if not polygon_data:
+        return []
+    
+    try:
+        # 如果已经是坐标列表
+        if isinstance(polygon_data, list):
+            if len(polygon_data) >= 3:
+                # 检查是否是嵌套格式 [[[lng,lat],...]]
+                if isinstance(polygon_data[0], list) and isinstance(polygon_data[0][0], list):
+                    return polygon_data[0]
+                # 已经是 [lng, lat] 格式
+                elif isinstance(polygon_data[0], list) and len(polygon_data[0]) == 2:
+                    return polygon_data
+        return []
+    except:
+        return []
+
 # ==================== 心跳包模拟器 ====================
 class HeartbeatSimulator:
     def __init__(self, start_point_gcj):
@@ -151,9 +170,9 @@ class HeartbeatSimulator:
             self.history.pop()
         return heartbeat
 
-# ==================== 创建带绘图功能的地图 ====================
-def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=None, draw_enabled=True):
-    """创建支持手绘多边形的地图"""
+# ==================== 创建地图 ====================
+def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None):
+    """创建航线规划地图"""
     m = folium.Map(
         location=[center_gcj[1], center_gcj[0]],
         zoom_start=16,
@@ -162,27 +181,26 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
     )
     
     # 添加绘图控件
-    if draw_enabled:
-        draw = plugins.Draw(
-            export=True,
-            filename='draw.geojson',
-            position='topleft',
-            draw_options={
-                'polygon': {'allowIntersection': False, 'showArea': True},
-                'polyline': False,
-                'rectangle': False,
-                'circle': False,
-                'marker': False,
-                'circlemarker': False
-            },
-            edit_options={'edit': True, 'remove': True}
-        )
-        m.add_child(draw)
+    draw = plugins.Draw(
+        export=True,
+        position='topleft',
+        draw_options={
+            'polygon': {'allowIntersection': False, 'showArea': True},
+            'polyline': False,
+            'rectangle': False,
+            'circle': False,
+            'marker': False,
+            'circlemarker': False
+        },
+        edit_options={'edit': True, 'remove': True}
+    )
+    m.add_child(draw)
     
     # 添加已保存的障碍物多边形
     for i, obs in enumerate(obstacles_gcj):
-        if obs.get('polygon') and len(obs['polygon']) >= 3:
-            locations = [[p[1], p[0]] for p in obs['polygon']]
+        coords = get_polygon_coords(obs.get('polygon', []))
+        if coords and len(coords) >= 3:
+            locations = [[c[1], c[0]] for c in coords]
             folium.Polygon(
                 locations=locations,
                 color="red",
@@ -261,29 +279,11 @@ def main():
         }
     
     if "obstacles_gcj" not in st.session_state:
-        st.session_state.obstacles_gcj = load_obstacles_from_file()
-        if not st.session_state.obstacles_gcj:
-            # 默认障碍物（校园内建筑物）
-            st.session_state.obstacles_gcj = [
-                {
-                    "name": "教学楼",
-                    "polygon": [
-                        [118.6950, 32.2010],
-                        [118.6960, 32.2010],
-                        [118.6960, 32.2018],
-                        [118.6950, 32.2018]
-                    ]
-                },
-                {
-                    "name": "图书馆",
-                    "polygon": [
-                        [118.6970, 32.2015],
-                        [118.6978, 32.2015],
-                        [118.6978, 32.2022],
-                        [118.6970, 32.2022]
-                    ]
-                }
-            ]
+        loaded = load_obstacles_from_file()
+        if loaded:
+            st.session_state.obstacles_gcj = loaded
+        else:
+            st.session_state.obstacles_gcj = []
     
     if "heartbeat_sim" not in st.session_state:
         st.session_state.heartbeat_sim = HeartbeatSimulator(st.session_state.points_gcj['A'].copy())
@@ -292,24 +292,18 @@ def main():
     if "simulation_running" not in st.session_state:
         st.session_state.simulation_running = False
     if "flight_altitude" not in st.session_state:
-        st.session_state.flight_altitude = 50
+        st.session_state.flight_altitude =50
     if "flight_history" not in st.session_state:
         st.session_state.flight_history = []
-    if "drawn_polygons" not in st.session_state:
-        st.session_state.drawn_polygons = []
     
     # 选择地图瓦片
-    if map_type == "卫星影像":
-        GAODE_URL = GAODE_SATELLITE_URL
-        tile_attr = "高德卫星地图"
-    else:
-        GAODE_URL = GAODE_VECTOR_URL
-        tile_attr = "高德矢量地图"
+    GAODE_URL = GAODE_SATELLITE_URL if map_type == "卫星影像" else GAODE_VECTOR_URL
+    tile_attr = "高德卫星地图" if map_type == "卫星影像" else "高德矢量地图"
     
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        st.info("💡 操作说明：左侧输入坐标设置A/B点 | 右侧地图可手绘多边形添加障碍物")
+        st.info("💡 操作说明：左侧输入坐标设置A/B点 | 右侧地图点击左上角画笔图标，手绘多边形添加障碍物")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -363,16 +357,13 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图 (可手绘多边形添加障碍物)")
-            st.caption("✏️ 点击左上角画笔图标，在地图上绘制多边形障碍物")
+            st.caption("✏️ 点击左上角📐图标，在地图上绘制多边形障碍物")
             
-            # 获取飞行轨迹
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
             
-            # 创建带绘图功能的地图
-            m = create_map_with_draw(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail, draw_enabled=True)
+            m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail)
             
-            # 使用 st_folium 捕获绘图数据
             output = st_folium(m, width=700, height=550, returned_objects=["last_draw"])
             
             # 处理新绘制的多边形
@@ -381,18 +372,22 @@ def main():
                 if last_draw and last_draw.get("geometry"):
                     geometry = last_draw["geometry"]
                     if geometry.get("type") == "Polygon":
-                        coords = geometry.get("coordinates", [])[0]
-                        # 转换坐标格式
-                        polygon_coords = [[c[0], c[1]] for c in coords]
-                        # 添加到障碍物列表
-                        new_obs = {
-                            "name": f"手绘障碍物{len(st.session_state.obstacles_gcj) + 1}",
-                            "polygon": polygon_coords
-                        }
-                        st.session_state.obstacles_gcj.append(new_obs)
-                        save_obstacles_to_file(st.session_state.obstacles_gcj)
-                        st.success(f"✅ 已添加手绘障碍物")
-                        st.rerun()
+                        coords = geometry.get("coordinates", [])
+                        if coords and len(coords) > 0:
+                            # 提取多边形顶点坐标
+                            polygon_coords = []
+                            for point in coords[0]:
+                                polygon_coords.append([point[0], point[1]])
+                            
+                            if len(polygon_coords) >= 3:
+                                new_obs = {
+                                    "name": f"手绘障碍物{len(st.session_state.obstacles_gcj) + 1}",
+                                    "polygon": polygon_coords
+                                }
+                                st.session_state.obstacles_gcj.append(new_obs)
+                                save_obstacles_to_file(st.session_state.obstacles_gcj)
+                                st.success(f"✅ 已添加手绘障碍物")
+                                st.rerun()
             
             st.caption("📌 **图例**：🟢 A点 | 🔴 B点 | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线 | 🟠 橙色线=历史轨迹")
     
@@ -501,7 +496,7 @@ def main():
     # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
-        st.info("💡 障碍物配置会保存到本地文件，刷新页面不丢失。也可以在「航线规划」页面手绘添加。")
+        st.info("💡 障碍物配置会保存到本地文件，刷新页面不丢失")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -572,8 +567,9 @@ def main():
             )
             
             for i, obs in enumerate(st.session_state.obstacles_gcj):
-                if obs.get('polygon') and len(obs['polygon']) >= 3:
-                    locations = [[p[1], p[0]] for p in obs['polygon']]
+                coords = get_polygon_coords(obs.get('polygon', []))
+                if coords and len(coords) >= 3:
+                    locations = [[c[1], c[0]] for c in coords]
                     folium.Polygon(
                         locations=locations,
                         color="red",
