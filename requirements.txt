@@ -1,5 +1,4 @@
-streamlit==1.35.0
-folium==0.15.1
-streamlit-folium==0.21.0
-pandas==2.1.4
-protobuf==3.20.3
+streamlit
+folium
+streamlit-folium
+pandas
