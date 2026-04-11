@@ -118,11 +118,13 @@ class HeartbeatSimulator:
 
 # ==================== 创建地图 ====================
 def create_map(center_lat, center_lng, point_a=None, point_b=None, obstacles=None, flight_path=None):
-    """创建OpenStreetMap地图"""
+    """创建高德卫星地图（国内可用）"""
+    # 高德卫星图 URL（style=6 是卫星图，style=7 是混合图）
     m = folium.Map(
         location=[center_lat, center_lng], 
         zoom_start=16, 
-        tiles="OpenStreetMap"
+        tiles="https://webst01.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}",
+        attr="高德卫星地图"
     )
     
     # 添加障碍物多边形
@@ -130,7 +132,6 @@ def create_map(center_lat, center_lng, point_a=None, point_b=None, obstacles=Non
         for obs in obstacles:
             if obs.get("type") == "polygon" and obs.get("coordinates"):
                 coords = obs["coordinates"]
-                # 转换坐标格式为 [[lat, lng], ...]
                 locations = [[c[1], c[0]] for c in coords]
                 folium.Polygon(
                     locations=locations,
@@ -323,7 +324,7 @@ def main():
             monitor_map = folium.Map(
                 location=[latest['lat'], latest['lng']],
                 zoom_start=17,
-                tiles="OpenStreetMap"
+                tiles="https://webst01.is.autonavi.com/appmaptile?style=7&x={x}&y={y}&z={z}"
             )
             
             # 绘制轨迹
