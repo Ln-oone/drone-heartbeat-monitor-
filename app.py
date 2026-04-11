@@ -168,9 +168,9 @@ class HeartbeatSimulator:
             self.history.pop()
         return heartbeat
 
-# ==================== 创建地图 ====================
+# ==================== 创建地图（不包含有问题的插件） ====================
 def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None):
-    """创建航线规划地图"""
+    """创建航线规划地图 - 使用高德地图，支持手绘多边形"""
     m = folium.Map(
         location=[center_gcj[1], center_gcj[0]],
         zoom_start=16,
@@ -178,7 +178,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         attr="高德卫星地图"
     )
     
-    # 添加绘图控件
+    # 添加绘图控件（用于手绘障碍物）
     draw = plugins.Draw(
         export=True,
         position='topleft',
@@ -187,15 +187,12 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
             'polyline': False,
             'rectangle': False,
             'circle': False,
-            'marker': True,
+            'marker': False,
             'circlemarker': False
         },
         edit_options={'edit': True, 'remove': True}
     )
     m.add_child(draw)
-    
-    # 添加点击获取坐标的插件（修复：使用正确的方法名）
-    m.add_child(plugins.LatLngPopup())
     
     # 添加已保存的障碍物多边形
     for i, obs in enumerate(obstacles_gcj):
@@ -316,7 +313,7 @@ def main():
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        st.info("💡 **两种方式设置A/B点**：1️⃣ 左侧输入经纬度  2️⃣ 右侧地图点击选点（点击地图任意位置获取坐标）")
+        st.info("💡 **两种方式设置A/B点**：1️⃣ 左侧输入经纬度  2️⃣ 右侧地图使用绘图工具添加标记（点击左上角📐图标选择Marker）")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -327,9 +324,9 @@ def main():
             st.markdown("#### 📍 设置航点方式")
             point_input_method = st.radio(
                 "选择方式",
-                ["✏️ 手动输入经纬度", "🖱️ 地图点击选点"],
+                ["✏️ 手动输入经纬度", "🖱️ 地图标记选点"],
                 horizontal=True,
-                help="手动输入：在下方输入坐标；地图点击：在地图上点击位置后点击下方按钮"
+                help="手动输入：在下方输入坐标；地图标记：使用右侧地图的绘图工具添加标记点"
             )
             
             st.markdown("---")
@@ -353,14 +350,14 @@ def main():
                     st.session_state.points_gcj['B'] = [b_lng, b_lat]
                     st.success(f"✅ B点已设置 ({b_lng:.6f}, {b_lat:.6f})")
             
-            else:  # 地图点击选点
-                st.info("🖱️ **操作说明**：在右侧地图上点击任意位置，会弹出坐标弹窗，将坐标复制到下方输入框")
-                
+            else:  # 地图标记选点
                 st.markdown("#### 🟢 起点 A")
+                st.info("使用右侧地图的绘图工具添加标记点，然后将标记点坐标复制到下方")
+                
                 a_lat_click = st.number_input("纬度", value=st.session_state.points_gcj['A'][1], format="%.6f", key="a_lat_click")
                 a_lng_click = st.number_input("经度", value=st.session_state.points_gcj['A'][0], format="%.6f", key="a_lng_click")
                 
-                if st.button("📌 将点击坐标设为A点", use_container_width=True, type="primary"):
+                if st.button("📌 设为A点", use_container_width=True, type="primary"):
                     st.session_state.points_gcj['A'] = [a_lng_click, a_lat_click]
                     st.session_state.heartbeat_sim.current_pos = [a_lng_click, a_lat_click]
                     st.success(f"✅ A点已设置")
@@ -369,7 +366,7 @@ def main():
                 b_lat_click = st.number_input("纬度", value=st.session_state.points_gcj['B'][1], format="%.6f", key="b_lat_click")
                 b_lng_click = st.number_input("经度", value=st.session_state.points_gcj['B'][0], format="%.6f", key="b_lng_click")
                 
-                if st.button("📌 将点击坐标设为B点", use_container_width=True, type="primary"):
+                if st.button("📌 设为B点", use_container_width=True, type="primary"):
                     st.session_state.points_gcj['B'] = [b_lng_click, b_lat_click]
                     st.success(f"✅ B点已设置")
             
@@ -414,19 +411,48 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("💡 **点击地图任意位置** → 弹出坐标弹窗 → 复制坐标到左侧输入框")
+            st.caption("✏️ **手绘障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上绘制")
+            st.caption("📍 **添加标记点**：点击左上角📐图标 → 选择Marker → 在地图上点击放置 → 复制坐标到左侧")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
             
-            # 创建支持点击的地图
+            # 创建地图
             m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail)
             
-            # 显示地图
-            folium_static(m, width=700, height=550)
+            # 显示地图并捕获绘图数据
+            output = st_folium(m, width=700, height=550, returned_objects=["last_draw"])
+            
+            # 处理新绘制的多边形（障碍物）
+            if output and output.get("last_draw"):
+                last_draw = output["last_draw"]
+                if last_draw and last_draw.get("geometry"):
+                    geometry = last_draw["geometry"]
+                    if geometry.get("type") == "Polygon":
+                        coords = geometry.get("coordinates", [])
+                        if coords and len(coords) > 0:
+                            polygon_coords = []
+                            for point in coords[0]:
+                                polygon_coords.append([point[0], point[1]])
+                            
+                            if len(polygon_coords) >= 3:
+                                new_obs = {
+                                    "name": f"手绘障碍物{len(st.session_state.obstacles_gcj) + 1}",
+                                    "polygon": polygon_coords
+                                }
+                                st.session_state.obstacles_gcj.append(new_obs)
+                                save_obstacles_to_file(st.session_state.obstacles_gcj)
+                                st.success(f"✅ 已添加手绘障碍物")
+                                st.rerun()
+                    
+                    # 处理标记点（可以作为A/B点参考）
+                    elif geometry.get("type") == "Point":
+                        coords = geometry.get("coordinates", [])
+                        if coords and len(coords) >= 2:
+                            marker_lng, marker_lat = coords[0], coords[1]
+                            st.info(f"📍 点击位置: ({marker_lng:.6f}, {marker_lat:.6f}) - 可复制到左侧输入框")
             
             st.caption("📌 **图例**：🟢 A点 | 🔴 B点 | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线 | 🟠 橙色线=历史轨迹")
-            st.caption("✏️ **手绘障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上绘制 → 自动保存")
     
     # ==================== 飞行监控页面 ====================
     elif page == "📡 飞行监控":
