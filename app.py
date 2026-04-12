@@ -22,7 +22,6 @@ CONFIG_FILE = "obstacle_config.json"
 
 # 高德地图瓦片
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
-GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 
 # ==================== 坐标系转换函数 ====================
 def gcj02_to_wgs84(lng, lat):
@@ -151,7 +150,7 @@ class HeartbeatSimulator:
         return heartbeat
 
 # ==================== 创建地图 ====================
-def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=None):
+def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None):
     m = folium.Map(
         location=[center_gcj[1], center_gcj[0]],
         zoom_start=16,
@@ -159,18 +158,12 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
         attr="高德卫星地图"
     )
     
-    # 绘图控件 - 绘制后自动变为红色多边形
+    # 绘图控件
     draw = plugins.Draw(
         export=True,
         position='topleft',
         draw_options={
-            'polygon': {
-                'allowIntersection': False,
-                'showArea': True,
-                'color': '#ff0000',      # 红色边框
-                'fillColor': '#ff0000',   # 红色填充
-                'fillOpacity': 0.4
-            },
+            'polygon': {'allowIntersection': False, 'showArea': True},
             'polyline': False,
             'rectangle': False,
             'circle': False,
@@ -181,7 +174,7 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
     )
     m.add_child(draw)
     
-    # 添加已保存的障碍物多边形（红色）
+    # 显示已保存的障碍物（红色）
     for i, obs in enumerate(obstacles_gcj):
         coords = obs.get('polygon', [])
         if coords and len(coords) >= 3:
@@ -196,42 +189,23 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
                 popup=f"🚧 {obs.get('name', f'障碍物{i+1}')}"
             ).add_to(m)
     
-    # 起点 A - 图书馆
+    # 起点 - 图书馆
     if points_gcj.get('A'):
         folium.Marker(
             [points_gcj['A'][1], points_gcj['A'][0]],
             popup="📚 图书馆 (起点)",
             icon=folium.Icon(color="green", icon="book", prefix="fa")
         ).add_to(m)
-        # 添加圆圈标注
-        folium.CircleMarker(
-            [points_gcj['A'][1], points_gcj['A'][0]],
-            radius=15,
-            color="green",
-            fill=True,
-            fill_color="green",
-            fill_opacity=0.3,
-            popup="起点区域"
-        ).add_to(m)
     
-    # 终点 B - 食堂
+    # 终点 - 食堂
     if points_gcj.get('B'):
         folium.Marker(
             [points_gcj['B'][1], points_gcj['B'][0]],
             popup="🍽️ 食堂 (终点)",
             icon=folium.Icon(color="red", icon="utensils", prefix="fa")
         ).add_to(m)
-        folium.CircleMarker(
-            [points_gcj['B'][1], points_gcj['B'][0]],
-            radius=15,
-            color="red",
-            fill=True,
-            fill_color="red",
-            fill_opacity=0.3,
-            popup="终点区域"
-        ).add_to(m)
     
-    # 规划航线
+    # 航线
     if points_gcj.get('A') and points_gcj.get('B'):
         folium.PolyLine(
             [[points_gcj['A'][1], points_gcj['A'][0]], 
@@ -239,7 +213,7 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
             color="blue",
             weight=4,
             opacity=0.8,
-            popup="规划航线: 图书馆 → 食堂"
+            popup="图书馆 → 食堂"
         ).add_to(m)
     
     # 飞行轨迹
@@ -281,6 +255,8 @@ def main():
         st.session_state.flight_altitude = 50
     if "flight_history" not in st.session_state:
         st.session_state.flight_history = []
+    if "drawn_polygon" not in st.session_state:
+        st.session_state.drawn_polygon = None
     
     # ==================== 侧边栏 ====================
     st.sidebar.title("🎛️ 导航菜单")
@@ -302,30 +278,28 @@ def main():
     )
     
     st.sidebar.markdown("---")
-    # 实时显示障碍物数量
     obs_count = len(st.session_state.obstacles_gcj)
     st.sidebar.info(
         f"🏫 南京科技职业学院\n"
-        f"📚 起点: 图书馆 (118.746956, 32.232945)\n"
-        f"🍽️ 终点: 食堂 (118.751589, 32.235204)\n"
-        f"🚧 **障碍物数量: {obs_count} 个**"
+        f"📚 起点: 图书馆\n"
+        f"🍽️ 终点: 食堂\n"
+        f"🚧 **障碍物数量: {obs_count}**"
     )
     
-    # 刷新按钮
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
         st.session_state.obstacles_gcj = load_obstacles()
         st.rerun()
     
-    GAODE_URL = GAODE_SATELLITE_URL if map_type == "卫星影像" else GAODE_VECTOR_URL
-    
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        st.info("💡 **操作说明**：\n"
-                "1️⃣ 点击地图左上角的 **📐 多边形工具**\n"
-                "2️⃣ 在地图上**依次点击**圈出建筑物轮廓\n"
-                "3️⃣ **双击完成绘制**，障碍物会自动保存为红色区域\n"
-                "4️⃣ 侧边栏的数字会立即更新")
+        
+        st.info("""
+        ### 📝 操作说明：
+        1. **设置起点/终点**：左侧输入框修改图书馆/食堂坐标，点击按钮保存
+        2. **圈选障碍物**：点击地图左上角的 **📐 图标** → 选择 **多边形** → 在地图上依次点击圈出建筑物轮廓 → **双击完成**
+        3. **保存障碍物**：绘制完成后，点击下方 **💾 保存当前绘制的多边形** 按钮
+        """)
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -355,6 +329,7 @@ def main():
             st.metric("⚡ 当前速度系数", f"{drone_speed}%")
             
             st.markdown("---")
+            
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("▶️ 开始飞行", use_container_width=True):
@@ -380,41 +355,54 @@ def main():
             b = st.session_state.points_gcj['B']
             dist = math.sqrt((b[0]-a[0])**2 + (b[1]-a[1])**2) * 111000
             st.caption(f"📏 航线距离: 约 {dist:.0f} 米")
+            
+            st.markdown("---")
+            st.markdown("### 🚧 障碍物操作")
+            
+            # 显示当前待保存的绘图
+            if st.session_state.drawn_polygon:
+                st.info(f"待保存的障碍物: {len(st.session_state.drawn_polygon)} 个点")
+                if st.button("💾 保存当前绘制的多边形", use_container_width=True, type="primary"):
+                    new_name = f"建筑物{len(st.session_state.obstacles_gcj) + 1}"
+                    st.session_state.obstacles_gcj.append({
+                        "name": new_name,
+                        "polygon": st.session_state.drawn_polygon
+                    })
+                    save_obstacles(st.session_state.obstacles_gcj)
+                    st.session_state.drawn_polygon = None
+                    st.success(f"✅ 已添加 {new_name}，当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
+                    st.rerun()
+            else:
+                st.caption("💡 在地图上绘制多边形后，这里会出现「保存」按钮")
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("✏️ **点击左上角📐图标 → 选择多边形 → 围绕建筑物依次点击 → 双击完成**")
+            st.caption("✏️ 点击左上角📐图标 → 选择多边形 → 围绕建筑物依次点击 → 双击完成")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
             
-            m = create_map_with_draw(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail)
+            m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail)
             
-            output = st_folium(m, width=700, height=550, returned_objects=["last_draw"])
+            # 返回所有绘图数据
+            output = st_folium(m, width=700, height=550, returned_objects=["all_drawings"])
             
-            # 处理新绘制的多边形 - 关键修复
-            if output and output.get("last_draw"):
-                last_draw = output["last_draw"]
-                if last_draw:
-                    # 检查是否是 polygon 类型
-                    if last_draw.get("geometry") and last_draw["geometry"].get("type") == "Polygon":
-                        coords = last_draw["geometry"].get("coordinates", [])
-                        if coords and len(coords) > 0:
-                            polygon_coords = []
-                            for point in coords[0]:
-                                polygon_coords.append([point[0], point[1]])
-                            
-                            if len(polygon_coords) >= 3:
-                                # 添加到障碍物列表
-                                new_name = f"建筑物{len(st.session_state.obstacles_gcj) + 1}"
-                                st.session_state.obstacles_gcj.append({
-                                    "name": new_name,
-                                    "polygon": polygon_coords
-                                })
-                                # 保存到文件
-                                save_obstacles(st.session_state.obstacles_gcj)
-                                st.success(f"✅ 已添加 {new_name}，当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
-                                st.rerun()
+            # 获取所有绘制的图形
+            if output and output.get("all_drawings"):
+                drawings = output["all_drawings"]
+                if drawings and len(drawings) > 0:
+                    # 取最后一个绘制的图形
+                    last_draw = drawings[-1]
+                    if last_draw and last_draw.get("geometry"):
+                        geometry = last_draw["geometry"]
+                        if geometry.get("type") == "Polygon":
+                            coords = geometry.get("coordinates", [])
+                            if coords and len(coords) > 0:
+                                polygon_coords = []
+                                for point in coords[0]:
+                                    polygon_coords.append([point[0], point[1]])
+                                if len(polygon_coords) >= 3:
+                                    st.session_state.drawn_polygon = polygon_coords
             
             st.caption("📌 **图例**：📚 绿色=图书馆 | 🍽️ 红色=食堂 | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线")
     
@@ -468,7 +456,7 @@ def main():
             monitor_map = folium.Map(
                 location=[latest['lat'], latest['lng']],
                 zoom_start=17,
-                tiles=GAODE_URL,
+                tiles=GAODE_SATELLITE_URL,
                 attr="高德卫星地图"
             )
             
@@ -604,7 +592,7 @@ def main():
             obs_map = folium.Map(
                 location=[SCHOOL_CENTER_GCJ[1], SCHOOL_CENTER_GCJ[0]],
                 zoom_start=16,
-                tiles=GAODE_URL,
+                tiles=GAODE_SATELLITE_URL,
                 attr="高德卫星地图"
             )
             
