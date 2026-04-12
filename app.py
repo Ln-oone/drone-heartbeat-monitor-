@@ -14,19 +14,13 @@ import pandas as pd
 st.set_page_config(page_title="南京科技职业学院 - 无人机地面站系统", layout="wide")
 
 # ==================== 南京科技职业学院真实坐标 (GCJ-02) ====================
-# 学校中心坐标
-SCHOOL_CENTER_GCJ = [118.7490, 32.2340]  # [经度, 纬度]
+SCHOOL_CENTER_GCJ = [118.7490, 32.2340]
+DEFAULT_A_GCJ = [118.746956, 32.232945]  # 图书馆
+DEFAULT_B_GCJ = [118.751589, 32.235204]  # 食堂
 
-# 起点 A: 图书馆（主馆）
-DEFAULT_A_GCJ = [118.746956, 32.232945]
-
-# 终点 B: 食堂（主食堂 / 第一食堂）
-DEFAULT_B_GCJ = [118.751589, 32.235204]
-
-# ==================== 配置文件路径 ====================
 CONFIG_FILE = "obstacle_config.json"
 
-# ==================== 高德地图瓦片地址 ====================
+# 高德地图瓦片
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 
@@ -88,38 +82,20 @@ def load_obstacles():
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                st.session_state.obstacles_gcj = data.get('obstacles', [])
-                return
+                return data.get('obstacles', [])
         except:
-            pass
-    st.session_state.obstacles_gcj = []
+            return []
+    return []
 
-def save_obstacles():
+def save_obstacles(obstacles):
     data = {
-        'obstacles': st.session_state.obstacles_gcj,
-        'count': len(st.session_state.obstacles_gcj),
+        'obstacles': obstacles,
+        'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'version': 'v12.2'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-
-def add_obstacle(name, polygon_coords):
-    new_obs = {
-        "name": name,
-        "polygon": polygon_coords
-    }
-    st.session_state.obstacles_gcj.append(new_obs)
-    save_obstacles()
-    return len(st.session_state.obstacles_gcj)
-
-def delete_obstacle(index):
-    st.session_state.obstacles_gcj.pop(index)
-    save_obstacles()
-
-def clear_all_obstacles():
-    st.session_state.obstacles_gcj = []
-    save_obstacles()
 
 # ==================== 心跳包模拟器 ====================
 class HeartbeatSimulator:
@@ -174,7 +150,7 @@ class HeartbeatSimulator:
             self.history.pop()
         return heartbeat
 
-# ==================== 创建地图（支持手绘多边形） ====================
+# ==================== 创建地图 ====================
 def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=None):
     m = folium.Map(
         location=[center_gcj[1], center_gcj[0]],
@@ -215,14 +191,14 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
     if points_gcj.get('A'):
         folium.Marker(
             [points_gcj['A'][1], points_gcj['A'][0]],
-            popup="📚 起点 A: 图书馆",
+            popup="📚 图书馆 (起点)",
             icon=folium.Icon(color="green", icon="book", prefix="fa")
         ).add_to(m)
     
     if points_gcj.get('B'):
         folium.Marker(
             [points_gcj['B'][1], points_gcj['B'][0]],
-            popup="🍽️ 终点 B: 食堂",
+            popup="🍽️ 食堂 (终点)",
             icon=folium.Icon(color="red", icon="utensils", prefix="fa")
         ).add_to(m)
     
@@ -233,7 +209,7 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
             color="blue",
             weight=3,
             opacity=0.8,
-            popup="规划航线: 图书馆 → 食堂"
+            popup="图书馆 → 食堂"
         ).add_to(m)
     
     if flight_history and len(flight_history) > 1:
@@ -254,15 +230,17 @@ def main():
     st.title("🏫 南京科技职业学院 - 无人机地面站系统")
     st.markdown("---")
     
-    # ==================== 初始化所有 Session State ====================
-    if "obstacles_gcj" not in st.session_state:
-        load_obstacles()
-    
+    # ==================== 初始化 Session State ====================
     if "points_gcj" not in st.session_state:
         st.session_state.points_gcj = {
             'A': DEFAULT_A_GCJ.copy(),
             'B': DEFAULT_B_GCJ.copy()
         }
+    
+    # 关键修复：每次都从文件加载障碍物，确保数据是最新的
+    if "obstacles_loaded" not in st.session_state:
+        st.session_state.obstacles_gcj = load_obstacles()
+        st.session_state.obstacles_loaded = True
     
     if "heartbeat_sim" not in st.session_state:
         st.session_state.heartbeat_sim = HeartbeatSimulator(st.session_state.points_gcj['A'].copy())
@@ -274,10 +252,8 @@ def main():
         st.session_state.flight_altitude = 50
     if "flight_history" not in st.session_state:
         st.session_state.flight_history = []
-    if "refresh_counter" not in st.session_state:
-        st.session_state.refresh_counter = 0
     
-    # ==================== 侧边栏 ====================
+    # 侧边栏导航
     st.sidebar.title("🎛️ 导航菜单")
     page = st.sidebar.radio(
         "选择功能模块",
@@ -293,17 +269,23 @@ def main():
         min_value=10, 
         max_value=100, 
         value=50,
-        step=5,
-        help="数值越大，飞行越快"
+        step=5
     )
     
     st.sidebar.markdown("---")
-    obstacle_count = len(st.session_state.obstacles_gcj)
-    st.sidebar.info(f"🏫 南京科技职业学院\n📍 学校中心: {SCHOOL_CENTER_GCJ[0]:.4f}, {SCHOOL_CENTER_GCJ[1]:.4f}\n📚 起点: 图书馆\n🍽️ 终点: 食堂\n🚧 障碍物: {obstacle_count}个")
+    # 实时从 session_state 读取障碍物数量
+    current_obstacle_count = len(st.session_state.obstacles_gcj)
+    st.sidebar.info(
+        f"🏫 南京科技职业学院\n"
+        f"📍 学校中心: {SCHOOL_CENTER_GCJ[0]:.4f}, {SCHOOL_CENTER_GCJ[1]:.4f}\n"
+        f"📚 起点: 图书馆\n"
+        f"🍽️ 终点: 食堂\n"
+        f"🚧 障碍物: **{current_obstacle_count}** 个"
+    )
     
+    # 刷新按钮 - 重新从文件加载
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
-        load_obstacles()
-        st.session_state.refresh_counter += 1
+        st.session_state.obstacles_gcj = load_obstacles()
         st.rerun()
     
     GAODE_URL = GAODE_SATELLITE_URL if map_type == "卫星影像" else GAODE_VECTOR_URL
@@ -312,7 +294,7 @@ def main():
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        st.info("💡 **操作说明**：\n1️⃣ 左侧可修改图书馆/食堂坐标\n2️⃣ 右侧地图点击左上角📐图标 → 选择多边形 → 在地图上圈选建筑物作为障碍物\n3️⃣ 绘制完成后自动保存")
+        st.info("💡 **操作说明**：\n1️⃣ 左侧可修改图书馆/食堂坐标\n2️⃣ 右侧地图点击左上角📐图标 → 选择多边形 → 圈选建筑物\n3️⃣ 绘制完成后自动保存，侧边栏数字会更新")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -366,18 +348,18 @@ def main():
             
             st.markdown("---")
             st.markdown("### 📍 当前航点")
-            st.write(f"📚 起点 A (图书馆): ({st.session_state.points_gcj['A'][0]:.6f}, {st.session_state.points_gcj['A'][1]:.6f})")
-            st.write(f"🍽️ 终点 B (食堂): ({st.session_state.points_gcj['B'][0]:.6f}, {st.session_state.points_gcj['B'][1]:.6f})")
+            st.write(f"📚 图书馆: ({st.session_state.points_gcj['A'][0]:.6f}, {st.session_state.points_gcj['A'][1]:.6f})")
+            st.write(f"🍽️ 食堂: ({st.session_state.points_gcj['B'][0]:.6f}, {st.session_state.points_gcj['B'][1]:.6f})")
             
             if st.session_state.points_gcj['A'] and st.session_state.points_gcj['B']:
                 a = st.session_state.points_gcj['A']
                 b = st.session_state.points_gcj['B']
                 dist = math.sqrt((b[0]-a[0])**2 + (b[1]-a[1])**2) * 111000
-                st.caption(f"📏 航线距离: 约 {dist:.0f} 米 (图书馆 → 食堂)")
+                st.caption(f"📏 航线距离: 约 {dist:.0f} 米")
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("✏️ **圈选建筑物作为障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上围绕建筑物绘制 → 自动保存")
+            st.caption("✏️ **圈选建筑物作为障碍物**：点击左上角📐图标 → 选择多边形 → 围绕建筑物绘制")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
@@ -386,6 +368,7 @@ def main():
             
             output = st_folium(m, width=700, height=550, returned_objects=["last_draw"])
             
+            # 处理新绘制的多边形
             if output and output.get("last_draw"):
                 last_draw = output["last_draw"]
                 if last_draw and last_draw.get("geometry"):
@@ -398,19 +381,21 @@ def main():
                                 polygon_coords.append([point[0], point[1]])
                             
                             if len(polygon_coords) >= 3:
-                                new_count = add_obstacle(
-                                    f"建筑物{len(st.session_state.obstacles_gcj) + 1}",
-                                    polygon_coords
-                                )
-                                st.success(f"✅ 已添加障碍物，当前共 {new_count} 个")
+                                # 添加新障碍物
+                                new_obs = {
+                                    "name": f"建筑物{len(st.session_state.obstacles_gcj) + 1}",
+                                    "polygon": polygon_coords
+                                }
+                                st.session_state.obstacles_gcj.append(new_obs)
+                                save_obstacles(st.session_state.obstacles_gcj)
+                                st.success(f"✅ 已添加障碍物，当前共 {len(st.session_state.obstacles_gcj)} 个")
                                 st.rerun()
             
-            st.caption("📌 **图例**：📚 绿色=图书馆(起点) | 🍽️ 红色=食堂(终点) | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线")
+            st.caption("📌 **图例**：📚 绿色=图书馆 | 🍽️ 红色=食堂 | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线")
     
     # ==================== 飞行监控页面 ====================
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
-        st.caption("无人机从图书馆飞往食堂的实时数据")
         
         current_time = time.time()
         if current_time - st.session_state.last_hb_time >= 1 and st.session_state.simulation_running:
@@ -452,7 +437,7 @@ def main():
                 current_dist = math.sqrt((current[0]-a[0])**2 + (current[1]-a[1])**2)
                 if total_dist > 0:
                     progress = min(1.0, current_dist / total_dist)
-                    st.progress(progress, text=f"✈️ 飞行进度: {progress*100:.1f}% (图书馆 → 食堂)")
+                    st.progress(progress, text=f"✈️ 飞行进度: {progress*100:.1f}%")
             
             st.subheader("📍 实时位置")
             monitor_map = folium.Map(
@@ -488,10 +473,10 @@ def main():
             
             if st.session_state.points_gcj['A']:
                 folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
-                             popup="📚 起点: 图书馆", icon=folium.Icon(color='green', icon='book', prefix='fa')).add_to(monitor_map)
+                             popup="📚 图书馆", icon=folium.Icon(color='green', icon='book', prefix='fa')).add_to(monitor_map)
             if st.session_state.points_gcj['B']:
                 folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
-                             popup="🍽️ 终点: 食堂", icon=folium.Icon(color='blue', icon='utensils', prefix='fa')).add_to(monitor_map)
+                             popup="🍽️ 食堂", icon=folium.Icon(color='blue', icon='utensils', prefix='fa')).add_to(monitor_map)
             
             folium_static(monitor_map, width=800, height=400)
             
@@ -504,7 +489,6 @@ def main():
                         "高度(m)": [h["altitude"] for h in st.session_state.heartbeat_sim.history[:20]]
                     })
                     st.line_chart(alt_df, x="序号", y="高度(m)")
-                    st.caption("📊 高度变化趋势")
             with chart_col2:
                 if len(st.session_state.heartbeat_sim.history) > 1:
                     speed_df = pd.DataFrame({
@@ -512,7 +496,6 @@ def main():
                         "速度(m/s)": [h.get("speed", 0) for h in st.session_state.heartbeat_sim.history[:20]]
                     })
                     st.line_chart(speed_df, x="序号", y="速度(m/s)")
-                    st.caption("📊 速度变化趋势")
             
             st.subheader("📋 历史心跳记录")
             df = pd.DataFrame(st.session_state.heartbeat_sim.history[:10])
@@ -533,21 +516,25 @@ def main():
     # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
-        st.info(f"💡 当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物。\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能，围绕建筑物绘制多边形。\n\n**删除障碍物**：点击下方列表中的删除按钮。")
+        
+        # 确保显示最新数据
+        current_obstacles = st.session_state.obstacles_gcj
+        st.info(f"💡 当前共 **{len(current_obstacles)}** 个障碍物。\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能。\n\n**删除障碍物**：点击下方列表中的删除按钮。")
         
         col1, col2 = st.columns([1, 1.5])
         
         with col1:
             st.subheader("📝 障碍物列表")
             
-            if st.session_state.obstacles_gcj:
-                for i, obs in enumerate(st.session_state.obstacles_gcj):
+            if current_obstacles:
+                for i, obs in enumerate(current_obstacles):
                     col_name, col_btn = st.columns([3, 1])
                     with col_name:
                         st.write(f"🚧 {obs.get('name', f'障碍物{i+1}')}")
                     with col_btn:
                         if st.button("删除", key=f"del_{i}"):
-                            delete_obstacle(i)
+                            st.session_state.obstacles_gcj.pop(i)
+                            save_obstacles(st.session_state.obstacles_gcj)
                             st.rerun()
             else:
                 st.write("暂无障碍物，请前往「航线规划」页面圈选建筑物添加")
@@ -558,18 +545,19 @@ def main():
             col_save, col_load = st.columns(2)
             with col_save:
                 if st.button("💾 保存到文件", use_container_width=True):
-                    save_obstacles()
+                    save_obstacles(st.session_state.obstacles_gcj)
                     st.success(f"已保存 {len(st.session_state.obstacles_gcj)} 个障碍物")
             with col_load:
                 if st.button("📂 从文件加载", use_container_width=True):
-                    load_obstacles()
+                    st.session_state.obstacles_gcj = load_obstacles()
                     st.success(f"已加载 {len(st.session_state.obstacles_gcj)} 个障碍物")
                     st.rerun()
             
             col_clear, col_download = st.columns(2)
             with col_clear:
                 if st.button("🗑️ 清除全部", use_container_width=True):
-                    clear_all_obstacles()
+                    st.session_state.obstacles_gcj = []
+                    save_obstacles([])
                     st.rerun()
             with col_download:
                 config_data = {
@@ -612,18 +600,18 @@ def main():
             
             folium.Marker(
                 [DEFAULT_A_GCJ[1], DEFAULT_A_GCJ[0]],
-                popup="📚 图书馆 (起点)",
+                popup="📚 图书馆",
                 icon=folium.Icon(color='green', icon='book', prefix='fa')
             ).add_to(obs_map)
             
             folium.Marker(
                 [DEFAULT_B_GCJ[1], DEFAULT_B_GCJ[0]],
-                popup="🍽️ 食堂 (终点)",
+                popup="🍽️ 食堂",
                 icon=folium.Icon(color='red', icon='utensils', prefix='fa')
             ).add_to(obs_map)
             
             folium_static(obs_map, width=700, height=500)
-            st.caption("🔴 红色多边形为已圈选的建筑物障碍物 | 📚 图书馆 | 🍽️ 食堂")
+            st.caption("🔴 红色多边形为已圈选的建筑物障碍物")
 
 if __name__ == "__main__":
     main()
