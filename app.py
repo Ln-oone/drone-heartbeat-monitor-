@@ -11,12 +11,15 @@ from datetime import datetime
 import pandas as pd
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="无人机地面站系统 - 南京科技职业学院", layout="wide")
+st.set_page_config(page_title="南京科技职业学院 - 无人机地面站系统", layout="wide")
 
 # ==================== 南京科技职业学院真实坐标 (GCJ-02) ====================
-SCHOOL_CENTER_GCJ = [118.6965, 32.2015]
-DEFAULT_A_GCJ = [118.6960, 32.2005]
-DEFAULT_B_GCJ = [118.6968, 32.2030]
+# 学校正门坐标（从高德地图获取）
+SCHOOL_CENTER_GCJ = [118.6965, 32.2015]  # [经度, 纬度]
+
+# A点 (学校南门附近) B点 (学校北门附近)
+DEFAULT_A_GCJ = [118.6960, 32.2005]   # 南门区域
+DEFAULT_B_GCJ = [118.6968, 32.2030]   # 北门区域
 
 # ==================== 配置文件路径 ====================
 CONFIG_FILE = "obstacle_config.json"
@@ -77,9 +80,9 @@ def transform_lng(lng, lat):
 def out_of_china(lng, lat):
     return not (72.004 <= lng <= 137.8347 and 0.8293 <= lat <= 55.8271)
 
-# ==================== 全局障碍物管理（使用 session_state 实现跨页面同步） ====================
+# ==================== 全局障碍物管理 ====================
 def load_obstacles():
-    """从文件加载障碍物到 session_state"""
+    """从文件加载障碍物"""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -91,7 +94,7 @@ def load_obstacles():
     st.session_state.obstacles_gcj = []
 
 def save_obstacles():
-    """保存 session_state 中的障碍物到文件"""
+    """保存障碍物到文件"""
     data = {
         'obstacles': st.session_state.obstacles_gcj,
         'count': len(st.session_state.obstacles_gcj),
@@ -102,7 +105,7 @@ def save_obstacles():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def add_obstacle(name, polygon_coords):
-    """添加障碍物并保存"""
+    """添加障碍物"""
     new_obs = {
         "name": name,
         "polygon": polygon_coords
@@ -111,7 +114,7 @@ def add_obstacle(name, polygon_coords):
     save_obstacles()
 
 def delete_obstacle(index):
-    """删除障碍物并保存"""
+    """删除障碍物"""
     st.session_state.obstacles_gcj.pop(index)
     save_obstacles()
 
@@ -218,7 +221,7 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
     if points_gcj.get('A'):
         folium.Marker(
             [points_gcj['A'][1], points_gcj['A'][0]],
-            popup="🟢 起点 A",
+            popup="🟢 起点 A (南门)",
             icon=folium.Icon(color="green", icon="play", prefix="fa")
         ).add_to(m)
     
@@ -226,7 +229,7 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
     if points_gcj.get('B'):
         folium.Marker(
             [points_gcj['B'][1], points_gcj['B'][0]],
-            popup="🔴 终点 B",
+            popup="🔴 终点 B (北门)",
             icon=folium.Icon(color="red", icon="stop", prefix="fa")
         ).add_to(m)
     
@@ -257,22 +260,19 @@ def create_map_with_draw(center_gcj, points_gcj, obstacles_gcj, flight_history=N
 
 # ==================== 主程序 ====================
 def main():
-    st.title("✈️ 无人机地面站系统 - 南京科技职业学院")
+    st.title("🏫 南京科技职业学院 - 无人机地面站系统")
     st.markdown("---")
     
     # ==================== 初始化所有 Session State ====================
-    # 障碍物（全局共享）
     if "obstacles_gcj" not in st.session_state:
         load_obstacles()
     
-    # A/B 点坐标
     if "points_gcj" not in st.session_state:
         st.session_state.points_gcj = {
             'A': DEFAULT_A_GCJ.copy(),
             'B': DEFAULT_B_GCJ.copy()
         }
     
-    # 心跳包相关
     if "heartbeat_sim" not in st.session_state:
         st.session_state.heartbeat_sim = HeartbeatSimulator(st.session_state.points_gcj['A'].copy())
     if "last_hb_time" not in st.session_state:
@@ -303,12 +303,12 @@ def main():
         max_value=100, 
         value=50,
         step=5,
-        help="数值越大，飞行越快（10=很慢，50=正常，100=极快）"
+        help="数值越大，飞行越快"
     )
     
-    # 显示障碍物数量（同步显示）
+    # 显示学校信息和障碍物数量
     st.sidebar.markdown("---")
-    st.sidebar.info(f"🚧 当前障碍物数量: {len(st.session_state.obstacles_gcj)}")
+    st.sidebar.info(f"🏫 南京科技职业学院\n📍 坐标: {SCHOOL_CENTER_GCJ[0]:.4f}, {SCHOOL_CENTER_GCJ[1]:.4f}\n🚧 障碍物: {len(st.session_state.obstacles_gcj)}个")
     
     # 选择地图瓦片
     GAODE_URL = GAODE_SATELLITE_URL if map_type == "卫星影像" else GAODE_VECTOR_URL
@@ -317,30 +317,30 @@ def main():
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        st.info("💡 **操作说明**：左侧输入经纬度设置A/B点 | 右侧地图点击左上角📐图标，手绘多边形添加障碍物（绘制完成后自动保存，三个页面同步显示）")
+        st.info("💡 **操作说明**：\n1️⃣ 左侧输入经纬度设置A/B点\n2️⃣ 右侧地图点击左上角📐图标 → 选择多边形 → 在地图上圈选建筑物作为障碍物\n3️⃣ 绘制完成后自动保存，三个页面同步显示")
         
         col1, col2 = st.columns([1, 1.5])
         
         with col1:
             st.subheader("🎮 控制面板")
             
-            st.markdown("#### 🟢 起点 A (南门区域)")
+            st.markdown("#### 🟢 起点 A (学校南门)")
             a_lat = st.number_input("纬度", value=st.session_state.points_gcj['A'][1], format="%.6f", key="a_lat")
             a_lng = st.number_input("经度", value=st.session_state.points_gcj['A'][0], format="%.6f", key="a_lng")
             
             if st.button("📍 设置 A 点", use_container_width=True, type="primary"):
                 st.session_state.points_gcj['A'] = [a_lng, a_lat]
                 st.session_state.heartbeat_sim.current_pos = [a_lng, a_lat]
-                st.success(f"✅ A点已设置 ({a_lng:.6f}, {a_lat:.6f})")
+                st.success(f"✅ A点已设置 (南门)")
             
             st.markdown("---")
-            st.markdown("#### 🔴 终点 B (北门区域)")
+            st.markdown("#### 🔴 终点 B (学校北门)")
             b_lat = st.number_input("纬度", value=st.session_state.points_gcj['B'][1], format="%.6f", key="b_lat")
             b_lng = st.number_input("经度", value=st.session_state.points_gcj['B'][0], format="%.6f", key="b_lng")
             
             if st.button("📍 设置 B 点", use_container_width=True, type="primary"):
                 st.session_state.points_gcj['B'] = [b_lng, b_lat]
-                st.success(f"✅ B点已设置 ({b_lng:.6f}, {b_lat:.6f})")
+                st.success(f"✅ B点已设置 (北门)")
             
             st.markdown("---")
             st.markdown("#### ✈️ 飞行参数")
@@ -360,7 +360,7 @@ def main():
                         drone_speed
                     )
                     st.session_state.simulation_running = True
-                    st.success("🚁 飞行已开始！")
+                    st.success("🚁 飞行已开始！请切换到「飞行监控」页面查看实时数据")
             
             with col_btn2:
                 if st.button("⏹️ 停止飞行", use_container_width=True):
@@ -368,9 +368,9 @@ def main():
                     st.info("飞行已停止")
             
             st.markdown("---")
-            st.markdown("### 📍 当前航点 (GCJ-02)")
-            st.write(f"🟢 A点: ({st.session_state.points_gcj['A'][0]:.6f}, {st.session_state.points_gcj['A'][1]:.6f})")
-            st.write(f"🔴 B点: ({st.session_state.points_gcj['B'][0]:.6f}, {st.session_state.points_gcj['B'][1]:.6f})")
+            st.markdown("### 📍 当前航点")
+            st.write(f"🟢 A点 (南门): ({st.session_state.points_gcj['A'][0]:.6f}, {st.session_state.points_gcj['A'][1]:.6f})")
+            st.write(f"🔴 B点 (北门): ({st.session_state.points_gcj['B'][0]:.6f}, {st.session_state.points_gcj['B'][1]:.6f})")
             
             if st.session_state.points_gcj['A'] and st.session_state.points_gcj['B']:
                 a = st.session_state.points_gcj['A']
@@ -380,18 +380,16 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("✏️ **手绘障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上绘制 → 自动保存并同步到所有页面")
+            st.caption("✏️ **圈选建筑物作为障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上围绕建筑物绘制 → 自动保存")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
             
-            # 创建地图（使用全局障碍物数据）
             m = create_map_with_draw(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail)
             
-            # 显示地图并捕获绘图数据
             output = st_folium(m, width=700, height=550, returned_objects=["last_draw"])
             
-            # 处理新绘制的多边形（自动保存并同步）
+            # 处理新绘制的多边形（自动保存）
             if output and output.get("last_draw"):
                 last_draw = output["last_draw"]
                 if last_draw and last_draw.get("geometry"):
@@ -405,19 +403,18 @@ def main():
                             
                             if len(polygon_coords) >= 3:
                                 add_obstacle(
-                                    f"手绘障碍物{len(st.session_state.obstacles_gcj) + 1}",
+                                    f"建筑物{len(st.session_state.obstacles_gcj) + 1}",
                                     polygon_coords
                                 )
-                                st.success(f"✅ 已添加手绘障碍物，当前共 {len(st.session_state.obstacles_gcj)} 个")
+                                st.success(f"✅ 已添加障碍物，当前共 {len(st.session_state.obstacles_gcj)} 个")
                                 st.rerun()
             
-            st.caption("📌 **图例**：🟢 A点 | 🔴 B点 | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线 | 🟠 橙色线=历史轨迹")
+            st.caption("📌 **图例**：🟢 A点(南门) | 🔴 B点(北门) | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线 | 🟠 橙色线=历史轨迹")
     
     # ==================== 飞行监控页面 ====================
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         
-        # 自动生成心跳包
         current_time = time.time()
         if current_time - st.session_state.last_hb_time >= 1 and st.session_state.simulation_running:
             new_hb = st.session_state.heartbeat_sim.generate()
@@ -430,7 +427,6 @@ def main():
         if st.session_state.heartbeat_sim.history:
             latest = st.session_state.heartbeat_sim.history[0]
             
-            # 指标卡片
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
                 st.metric("⏰ 时间", latest['timestamp'])
@@ -462,7 +458,6 @@ def main():
                     progress = min(1.0, current_dist / total_dist)
                     st.progress(progress, text=f"✈️ 飞行进度: {progress*100:.1f}%")
             
-            # 实时位置地图（也显示障碍物）
             st.subheader("📍 实时位置")
             monitor_map = folium.Map(
                 location=[latest['lat'], latest['lng']],
@@ -471,7 +466,7 @@ def main():
                 attr=tile_attr
             )
             
-            # 显示障碍物（同步显示）
+            # 显示障碍物
             for i, obs in enumerate(st.session_state.obstacles_gcj):
                 coords = obs.get('polygon', [])
                 if coords and len(coords) >= 3:
@@ -486,7 +481,6 @@ def main():
                         popup=f"🚧 {obs.get('name', f'障碍物{i+1}')}"
                     ).add_to(monitor_map)
             
-            # 轨迹
             trail_points = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng')]
             if len(trail_points) > 1:
                 folium.PolyLine(trail_points, color="orange", weight=3, opacity=0.7).add_to(monitor_map)
@@ -499,14 +493,13 @@ def main():
             
             if st.session_state.points_gcj['A']:
                 folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
-                             popup="起点 A", icon=folium.Icon(color='green')).add_to(monitor_map)
+                             popup="起点 A (南门)", icon=folium.Icon(color='green')).add_to(monitor_map)
             if st.session_state.points_gcj['B']:
                 folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
-                             popup="终点 B", icon=folium.Icon(color='blue')).add_to(monitor_map)
+                             popup="终点 B (北门)", icon=folium.Icon(color='blue')).add_to(monitor_map)
             
             folium_static(monitor_map, width=800, height=400)
             
-            # 数据图表
             st.subheader("📈 数据图表")
             chart_col1, chart_col2 = st.columns(2)
             with chart_col1:
@@ -545,7 +538,7 @@ def main():
     # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
-        st.info(f"💡 当前共 {len(st.session_state.obstacles_gcj)} 个障碍物。障碍物数据在三个页面自动同步，刷新页面不丢失。")
+        st.info(f"💡 当前共 {len(st.session_state.obstacles_gcj)} 个障碍物。\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能，围绕建筑物绘制多边形。\n\n**删除障碍物**：点击下方列表中的删除按钮。")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -562,7 +555,7 @@ def main():
                             delete_obstacle(i)
                             st.rerun()
             else:
-                st.write("暂无障碍物")
+                st.write("暂无障碍物，请前往「航线规划」页面圈选建筑物添加")
             
             st.markdown("---")
             st.subheader("💾 持久化操作")
@@ -597,29 +590,9 @@ def main():
                     mime="application/json",
                     use_container_width=True
                 )
-            
-            st.markdown("---")
-            st.subheader("➕ 手动添加障碍物")
-            obs_name = st.text_input("障碍物名称", value=f"障碍物{len(st.session_state.obstacles_gcj) + 1}")
-            
-            st.caption("多边形坐标格式: [[lng, lat], [lng, lat], ...]")
-            default_coords = "[[118.6955, 32.2010], [118.6965, 32.2010], [118.6965, 32.2020], [118.6955, 32.2020]]"
-            coords_input = st.text_area("多边形坐标", value=default_coords, height=100)
-            
-            if st.button("➕ 添加障碍物", use_container_width=True):
-                try:
-                    coords = json.loads(coords_input)
-                    if isinstance(coords, list) and len(coords) >= 3:
-                        add_obstacle(obs_name, coords)
-                        st.success(f"已添加障碍物: {obs_name}")
-                        st.rerun()
-                    else:
-                        st.error("坐标格式错误，需要至少3个点")
-                except Exception as e:
-                    st.error(f"坐标格式错误: {e}")
         
         with col2:
-            st.subheader("🗺️ 障碍物地图")
+            st.subheader("🗺️ 障碍物分布图")
             
             obs_map = folium.Map(
                 location=[SCHOOL_CENTER_GCJ[1], SCHOOL_CENTER_GCJ[0]],
@@ -642,8 +615,15 @@ def main():
                         popup=f"🚧 {obs.get('name', f'障碍物{i+1}')}"
                     ).add_to(obs_map)
             
+            # 添加学校标记
+            folium.Marker(
+                [SCHOOL_CENTER_GCJ[1], SCHOOL_CENTER_GCJ[0]],
+                popup="🏫 南京科技职业学院",
+                icon=folium.Icon(color='blue', icon='school', prefix='fa')
+            ).add_to(obs_map)
+            
             folium_static(obs_map, width=700, height=500)
-            st.caption("🔴 红色多边形为已设置的障碍物区域")
+            st.caption("🔴 红色多边形为已圈选的建筑物障碍物")
 
 if __name__ == "__main__":
     main()
