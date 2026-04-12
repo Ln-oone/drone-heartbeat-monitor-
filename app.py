@@ -23,8 +23,11 @@ DEFAULT_B_GCJ = [118.751589, 32.235204]  # 食堂
 
 CONFIG_FILE = "obstacle_config.json"
 
-# 高德卫星地图瓦片
+# ==================== 高德地图瓦片地址 ====================
+# 卫星影像图
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
+# 矢量街道图（带中文标注）
+GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 
 # ==================== 坐标系转换函数 ====================
 def gcj02_to_wgs84(lng, lat):
@@ -79,43 +82,13 @@ def out_of_china(lng, lat):
     return not (72.004 <= lng <= 137.8347 and 0.8293 <= lat <= 55.8271)
 
 # ==================== 路径规划算法 ====================
-def expand_polygon(polygon_coords, expand_meters=20):
-    """将多边形向外扩展一定距离（安全缓冲区）"""
-    # 转换坐标到平面近似（纬度方向每度约111km，经度方向每度约85km）
-    lat_scale = 111000
-    lng_scale = 111000 * math.cos(math.radians(polygon_coords[0][1]))
-    
-    # 转换为米制坐标
-    points_m = []
-    for lng, lat in polygon_coords:
-        x = lng * lng_scale
-        y = lat * lat_scale
-        points_m.append((x, y))
-    
-    # 创建Shapely多边形并扩展
-    poly = Polygon(points_m)
-    expanded = poly.buffer(expand_meters)
-    
-    # 转换回经纬度
-    expanded_coords = []
-    if expanded.geom_type == 'Polygon':
-        for x, y in expanded.exterior.coords:
-            lng = x / lng_scale
-            lat = y / lat_scale
-            expanded_coords.append([lng, lat])
-    
-    return expanded_coords
-
 def is_point_in_obstacles(point, obstacles_gcj):
     """检查点是否在障碍物内"""
-    from shapely.geometry import Point as ShapelyPoint
-    
     for obs in obstacles_gcj:
         coords = obs.get('polygon', [])
         if coords and len(coords) >= 3:
-            # 创建Shapely多边形
             poly = Polygon(coords)
-            pt = ShapelyPoint(point[0], point[1])
+            pt = Point(point[0], point[1])
             if poly.contains(pt):
                 return True
     return False
@@ -123,25 +96,24 @@ def is_point_in_obstacles(point, obstacles_gcj):
 def find_shortest_path(start, end, obstacles_gcj):
     """使用可见性图 + A* 算法找到最短路径"""
     
+    if not obstacles_gcj:
+        return [start, end]
+    
     # 获取所有障碍物的顶点作为潜在路径点
     vertices = [start, end]
     
     for obs in obstacles_gcj:
         coords = obs.get('polygon', [])
         if coords and len(coords) >= 3:
-            # 添加多边形的顶点，并稍微向外偏移一点
             for i, pt in enumerate(coords):
-                # 计算偏移方向（向外）
-                prev_pt = coords[i-1]
-                next_pt = coords[(i+1) % len(coords)]
-                # 计算角平分线方向（简化版：向外偏移0.00005度约5米）
-                offset_lng = 0.00005
-                offset_lat = 0.00005
-                vertices.append([pt[0] + offset_lng, pt[1] + offset_lat])
-                vertices.append([pt[0] - offset_lng, pt[1] + offset_lat])
-                vertices.append([pt[0] + offset_lng, pt[1] - offset_lat])
+                # 向外偏移一点
+                offset = 0.00005
+                vertices.append([pt[0] + offset, pt[1] + offset])
+                vertices.append([pt[0] - offset, pt[1] + offset])
+                vertices.append([pt[0] + offset, pt[1] - offset])
+                vertices.append([pt[0] - offset, pt[1] - offset])
     
-    # 去重（简单去重）
+    # 去重
     unique_vertices = []
     for v in vertices:
         is_unique = True
@@ -160,7 +132,6 @@ def find_shortest_path(start, end, obstacles_gcj):
             if i == j:
                 continue
             
-            # 检查线段是否与任何障碍物相交
             line = LineString([(v1[0], v1[1]), (v2[0], v2[1])])
             intersects = False
             
@@ -169,14 +140,12 @@ def find_shortest_path(start, end, obstacles_gcj):
                 if coords and len(coords) >= 3:
                     poly = Polygon(coords)
                     if line.intersects(poly) and not line.touches(poly):
-                        # 如果线段穿过障碍物内部
-                        mid_point = line.interpolate(0.5, normalized=True)
-                        if poly.contains(Point(mid_point.x, mid_point.y)):
+                        mid = line.interpolate(0.5, normalized=True)
+                        if poly.contains(Point(mid.x, mid.y)):
                             intersects = True
                             break
             
             if not intersects:
-                # 计算欧氏距离
                 dist = math.sqrt((v1[0]-v2[0])**2 + (v1[1]-v2[1])**2) * 111000
                 graph[i].append((j, dist))
     
@@ -192,7 +161,6 @@ def find_shortest_path(start, end, obstacles_gcj):
     if start_idx is None or end_idx is None:
         return [start, end]
     
-    # A* 搜索
     import heapq
     open_set = []
     heapq.heappush(open_set, (0, start_idx))
@@ -211,7 +179,6 @@ def find_shortest_path(start, end, obstacles_gcj):
         current = heapq.heappop(open_set)[1]
         
         if current == end_idx:
-            # 重构路径
             path = []
             while current in came_from:
                 path.append(unique_vertices[current])
@@ -228,7 +195,6 @@ def find_shortest_path(start, end, obstacles_gcj):
                 f_score[neighbor] = tentative_g + heuristic(neighbor, end_idx)
                 heapq.heappush(open_set, (f_score[neighbor], neighbor))
     
-    # 如果没有找到路径，返回直线
     return [start, end]
 
 def create_avoidance_path(start, end, obstacles_gcj):
@@ -236,7 +202,6 @@ def create_avoidance_path(start, end, obstacles_gcj):
     if not obstacles_gcj:
         return [start, end]
     
-    # 检查直线是否会穿过障碍物
     line = LineString([(start[0], start[1]), (end[0], end[1])])
     intersects_obstacle = False
     
@@ -251,9 +216,7 @@ def create_avoidance_path(start, end, obstacles_gcj):
     if not intersects_obstacle:
         return [start, end]
     
-    # 使用路径规划算法
-    path = find_shortest_path(start, end, obstacles_gcj)
-    return path
+    return find_shortest_path(start, end, obstacles_gcj)
 
 # ==================== 障碍物管理 ====================
 def load_obstacles():
@@ -336,12 +299,22 @@ class HeartbeatSimulator:
         return heartbeat
 
 # ==================== 创建地图 ====================
-def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None):
+def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None, map_type="satellite"):
+    """创建规划地图，根据 map_type 选择不同瓦片"""
+    
+    # 根据地图类型选择瓦片地址
+    if map_type == "satellite":
+        tiles = GAODE_SATELLITE_URL
+        attr = "高德卫星地图"
+    else:
+        tiles = GAODE_VECTOR_URL
+        attr = "高德矢量地图"
+    
     m = folium.Map(
         location=[center_gcj[1], center_gcj[0]],
         zoom_start=16,
-        tiles=GAODE_SATELLITE_URL,
-        attr="高德卫星地图"
+        tiles=tiles,
+        attr=attr
     )
     
     # 绘图控件 - 强制红色
@@ -481,7 +454,10 @@ def main():
         ["🗺️ 航线规划", "📡 飞行监控", "🚧 障碍物管理"]
     )
     
-    map_type = st.sidebar.radio("🗺️ 地图类型", ["卫星影像", "矢量地图"], index=0)
+    # 地图类型选择
+    map_type_choice = st.sidebar.radio("🗺️ 地图类型", ["卫星影像", "矢量街道"], index=0)
+    # 转换为内部使用的标识
+    map_type = "satellite" if map_type_choice == "卫星影像" else "vector"
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚡ 无人机速度设置")
@@ -529,7 +505,6 @@ def main():
             if st.button("📍 设置 A 点 (图书馆)", use_container_width=True, type="primary"):
                 st.session_state.points_gcj['A'] = [a_lng, a_lat]
                 st.success(f"✅ 起点已设置")
-                # 重新规划路径
                 st.session_state.planned_path = create_avoidance_path(
                     st.session_state.points_gcj['A'],
                     st.session_state.points_gcj['B'],
@@ -544,7 +519,6 @@ def main():
             if st.button("📍 设置 B 点 (食堂)", use_container_width=True, type="primary"):
                 st.session_state.points_gcj['B'] = [b_lng, b_lat]
                 st.success(f"✅ 终点已设置")
-                # 重新规划路径
                 st.session_state.planned_path = create_avoidance_path(
                     st.session_state.points_gcj['A'],
                     st.session_state.points_gcj['B'],
@@ -584,7 +558,6 @@ def main():
                             drone_speed
                         )
                     else:
-                        # 使用直线路径
                         straight_path = [st.session_state.points_gcj['A'], st.session_state.points_gcj['B']]
                         st.session_state.heartbeat_sim.set_path(
                             straight_path,
@@ -609,7 +582,6 @@ def main():
             st.caption(f"📏 直线距离: 约 {dist:.0f} 米")
             
             if st.session_state.planned_path and len(st.session_state.planned_path) > 2:
-                # 计算路径长度
                 path_dist = 0
                 for i in range(len(st.session_state.planned_path) - 1):
                     p1 = st.session_state.planned_path[i]
@@ -619,6 +591,10 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
+            if map_type_choice == "卫星影像":
+                st.caption("🛰️ **当前地图: 高德卫星影像**")
+            else:
+                st.caption("🗺️ **当前地图: 高德矢量街道图**")
             st.caption("✏️ 点击左上角📐图标 → 选择多边形 → 围绕建筑物依次点击 → 双击完成")
             st.caption("🟢 **绿色线 = 智能避障航线** | 🔵 蓝色线 = 直线航线（参考）")
             
@@ -626,7 +602,7 @@ def main():
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
             
             # 规划避障路径
-            if st.session_state.planned_path is None or len(st.session_state.obstacles_gcj) > 0:
+            if st.session_state.planned_path is None:
                 st.session_state.planned_path = create_avoidance_path(
                     st.session_state.points_gcj['A'],
                     st.session_state.points_gcj['B'],
@@ -638,12 +614,13 @@ def main():
                 st.session_state.points_gcj, 
                 st.session_state.obstacles_gcj, 
                 flight_trail,
-                st.session_state.planned_path
+                st.session_state.planned_path,
+                map_type
             )
             
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             
-            # 处理新绘制的多边形 - 自动保存并重新规划路径
+            # 处理新绘制的多边形
             if output and output.get("last_active_drawing"):
                 last_draw = output["last_active_drawing"]
                 if last_draw and last_draw.get("geometry"):
@@ -661,13 +638,12 @@ def main():
                                     "polygon": polygon_coords
                                 })
                                 save_obstacles(st.session_state.obstacles_gcj)
-                                # 重新规划路径
                                 st.session_state.planned_path = create_avoidance_path(
                                     st.session_state.points_gcj['A'],
                                     st.session_state.points_gcj['B'],
                                     st.session_state.obstacles_gcj
                                 )
-                                st.success(f"✅ 已添加 {new_name}，当前共 {len(st.session_state.obstacles_gcj)} 个障碍物，已重新规划避障路径")
+                                st.success(f"✅ 已添加 {new_name}，当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
                                 st.rerun()
             
             st.caption("📌 **图例**：📚 绿色=图书馆 | 🍽️ 红色=食堂 | 🔴 红色区域=障碍物 | 🟢 绿色线=智能避障航线 | 🟠 橙色线=历史轨迹")
@@ -716,11 +692,20 @@ def main():
                 st.progress(progress, text=f"✈️ 航线进度: {progress*100:.1f}% ({current_idx+1}/{total_waypoints} 航点)")
             
             st.subheader("📍 实时位置")
+            
+            # 根据地图类型选择瓦片
+            if map_type == "satellite":
+                tiles = GAODE_SATELLITE_URL
+                attr = "高德卫星地图"
+            else:
+                tiles = GAODE_VECTOR_URL
+                attr = "高德矢量地图"
+            
             monitor_map = folium.Map(
                 location=[latest['lat'], latest['lng']],
                 zoom_start=17,
-                tiles=GAODE_SATELLITE_URL,
-                attr="高德卫星地图"
+                tiles=tiles,
+                attr=attr
             )
             
             for i, obs in enumerate(st.session_state.obstacles_gcj):
@@ -737,7 +722,6 @@ def main():
                         popup=f"🚧 {obs.get('name', f'障碍物{i+1}')}"
                     ).add_to(monitor_map)
             
-            # 显示规划路径
             if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
                 path_locations = [[p[1], p[0]] for p in st.session_state.planned_path]
                 folium.PolyLine(
@@ -805,7 +789,7 @@ def main():
         st.header("🚧 障碍物管理")
         
         obs_list = st.session_state.obstacles_gcj
-        st.info(f"💡 当前共 **{len(obs_list)}** 个障碍物\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能\n\n**删除障碍物**：点击下方列表中的删除按钮，删除后会自动重新规划路径")
+        st.info(f"💡 当前共 **{len(obs_list)}** 个障碍物\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能\n\n**删除障碍物**：点击下方列表中的删除按钮")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -821,7 +805,6 @@ def main():
                         if st.button("删除", key=f"del_{i}"):
                             st.session_state.obstacles_gcj.pop(i)
                             save_obstacles(st.session_state.obstacles_gcj)
-                            # 重新规划路径
                             st.session_state.planned_path = create_avoidance_path(
                                 st.session_state.points_gcj['A'],
                                 st.session_state.points_gcj['B'],
@@ -847,7 +830,7 @@ def main():
                         st.session_state.points_gcj['B'],
                         st.session_state.obstacles_gcj
                     )
-                    st.success(f"已加载 {len(st.session_state.obstacles_gcj)} 个障碍物，已重新规划路径")
+                    st.success(f"已加载 {len(st.session_state.obstacles_gcj)} 个障碍物")
                     st.rerun()
             
             col_clear, col_download = st.columns(2)
@@ -879,11 +862,19 @@ def main():
         with col2:
             st.subheader("🗺️ 障碍物分布图")
             
+            # 根据地图类型选择瓦片
+            if map_type == "satellite":
+                tiles = GAODE_SATELLITE_URL
+                attr = "高德卫星地图"
+            else:
+                tiles = GAODE_VECTOR_URL
+                attr = "高德矢量地图"
+            
             obs_map = folium.Map(
                 location=[SCHOOL_CENTER_GCJ[1], SCHOOL_CENTER_GCJ[0]],
                 zoom_start=16,
-                tiles=GAODE_SATELLITE_URL,
-                attr="高德卫星地图"
+                tiles=tiles,
+                attr=attr
             )
             
             for i, obs in enumerate(st.session_state.obstacles_gcj):
@@ -900,7 +891,6 @@ def main():
                         popup=f"🚧 {obs.get('name', f'障碍物{i+1}')}"
                     ).add_to(obs_map)
             
-            # 显示避障路径
             if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
                 path_locations = [[p[1], p[0]] for p in st.session_state.planned_path]
                 folium.PolyLine(
