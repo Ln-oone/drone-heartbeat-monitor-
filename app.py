@@ -14,12 +14,9 @@ import pandas as pd
 st.set_page_config(page_title="南京科技职业学院 - 无人机地面站系统", layout="wide")
 
 # ==================== 南京科技职业学院真实坐标 (GCJ-02) ====================
-# 学校正门坐标（从高德地图获取）
-SCHOOL_CENTER_GCJ = [118.6965, 32.2015]  # [经度, 纬度]
-
-# A点 (学校南门附近) B点 (学校北门附近)
-DEFAULT_A_GCJ = [118.6960, 32.2005]   # 南门区域
-DEFAULT_B_GCJ = [118.6968, 32.2030]   # 北门区域
+SCHOOL_CENTER_GCJ = [118.6965, 32.2015]
+DEFAULT_A_GCJ = [118.6960, 32.2005]
+DEFAULT_B_GCJ = [118.6968, 32.2030]
 
 # ==================== 配置文件路径 ====================
 CONFIG_FILE = "obstacle_config.json"
@@ -105,16 +102,18 @@ def save_obstacles():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def add_obstacle(name, polygon_coords):
-    """添加障碍物"""
+    """添加障碍物并立即保存"""
     new_obs = {
         "name": name,
         "polygon": polygon_coords
     }
     st.session_state.obstacles_gcj.append(new_obs)
     save_obstacles()
+    # 返回新的数量供显示
+    return len(st.session_state.obstacles_gcj)
 
 def delete_obstacle(index):
-    """删除障碍物"""
+    """删除障碍物并立即保存"""
     st.session_state.obstacles_gcj.pop(index)
     save_obstacles()
 
@@ -283,6 +282,9 @@ def main():
         st.session_state.flight_altitude = 50
     if "flight_history" not in st.session_state:
         st.session_state.flight_history = []
+    # 用于强制刷新的标志
+    if "refresh_counter" not in st.session_state:
+        st.session_state.refresh_counter = 0
     
     # ==================== 侧边栏 ====================
     st.sidebar.title("🎛️ 导航菜单")
@@ -306,9 +308,16 @@ def main():
         help="数值越大，飞行越快"
     )
     
-    # 显示学校信息和障碍物数量
+    # 显示学校信息和障碍物数量（实时从 session_state 读取）
     st.sidebar.markdown("---")
-    st.sidebar.info(f"🏫 南京科技职业学院\n📍 坐标: {SCHOOL_CENTER_GCJ[0]:.4f}, {SCHOOL_CENTER_GCJ[1]:.4f}\n🚧 障碍物: {len(st.session_state.obstacles_gcj)}个")
+    obstacle_count = len(st.session_state.obstacles_gcj)
+    st.sidebar.info(f"🏫 南京科技职业学院\n📍 坐标: {SCHOOL_CENTER_GCJ[0]:.4f}, {SCHOOL_CENTER_GCJ[1]:.4f}\n🚧 障碍物: {obstacle_count}个")
+    
+    # 添加一个手动刷新按钮
+    if st.sidebar.button("🔄 刷新数据", use_container_width=True):
+        load_obstacles()  # 重新从文件加载
+        st.session_state.refresh_counter += 1
+        st.rerun()
     
     # 选择地图瓦片
     GAODE_URL = GAODE_SATELLITE_URL if map_type == "卫星影像" else GAODE_VECTOR_URL
@@ -317,7 +326,7 @@ def main():
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        st.info("💡 **操作说明**：\n1️⃣ 左侧输入经纬度设置A/B点\n2️⃣ 右侧地图点击左上角📐图标 → 选择多边形 → 在地图上圈选建筑物作为障碍物\n3️⃣ 绘制完成后自动保存，三个页面同步显示")
+        st.info("💡 **操作说明**：\n1️⃣ 左侧输入经纬度设置A/B点\n2️⃣ 右侧地图点击左上角📐图标 → 选择多边形 → 在地图上圈选建筑物作为障碍物\n3️⃣ 绘制完成后自动保存，侧边栏数字会同步更新")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -380,7 +389,7 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("✏️ **圈选建筑物作为障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上围绕建筑物绘制 → 自动保存")
+            st.caption("✏️ **圈选建筑物作为障碍物**：点击左上角📐图标 → 选择多边形 → 在地图上围绕建筑物绘制 → 自动保存并更新")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] if st.session_state.points_gcj['A'] else SCHOOL_CENTER_GCJ
@@ -389,7 +398,7 @@ def main():
             
             output = st_folium(m, width=700, height=550, returned_objects=["last_draw"])
             
-            # 处理新绘制的多边形（自动保存）
+            # 处理新绘制的多边形（自动保存并刷新）
             if output and output.get("last_draw"):
                 last_draw = output["last_draw"]
                 if last_draw and last_draw.get("geometry"):
@@ -402,11 +411,12 @@ def main():
                                 polygon_coords.append([point[0], point[1]])
                             
                             if len(polygon_coords) >= 3:
-                                add_obstacle(
+                                new_count = add_obstacle(
                                     f"建筑物{len(st.session_state.obstacles_gcj) + 1}",
                                     polygon_coords
                                 )
-                                st.success(f"✅ 已添加障碍物，当前共 {len(st.session_state.obstacles_gcj)} 个")
+                                st.success(f"✅ 已添加障碍物，当前共 {new_count} 个")
+                                # 强制刷新页面以更新侧边栏
                                 st.rerun()
             
             st.caption("📌 **图例**：🟢 A点(南门) | 🔴 B点(北门) | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线 | 🟠 橙色线=历史轨迹")
@@ -466,7 +476,7 @@ def main():
                 attr=tile_attr
             )
             
-            # 显示障碍物
+            # 显示障碍物（从 session_state 实时读取）
             for i, obs in enumerate(st.session_state.obstacles_gcj):
                 coords = obs.get('polygon', [])
                 if coords and len(coords) >= 3:
@@ -538,7 +548,7 @@ def main():
     # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
-        st.info(f"💡 当前共 {len(st.session_state.obstacles_gcj)} 个障碍物。\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能，围绕建筑物绘制多边形。\n\n**删除障碍物**：点击下方列表中的删除按钮。")
+        st.info(f"💡 当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物。\n\n**添加障碍物**：请在「航线规划」页面使用地图圈选功能，围绕建筑物绘制多边形。\n\n**删除障碍物**：点击下方列表中的删除按钮。")
         
         col1, col2 = st.columns([1, 1.5])
         
