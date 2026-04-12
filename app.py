@@ -20,7 +20,7 @@ DEFAULT_B_GCJ = [118.751589, 32.235204]  # 食堂
 
 CONFIG_FILE = "obstacle_config.json"
 
-# 高德地图瓦片
+# 高德卫星地图瓦片
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
 
 # ==================== 坐标系转换函数 ====================
@@ -158,12 +158,18 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         attr="高德卫星地图"
     )
     
-    # 绘图控件
+    # 绘图控件 - 强制红色
     draw = plugins.Draw(
         export=True,
         position='topleft',
         draw_options={
-            'polygon': {'allowIntersection': False, 'showArea': True},
+            'polygon': {
+                'allowIntersection': False,
+                'showArea': True,
+                'color': '#ff0000',
+                'fillColor': '#ff0000',
+                'fillOpacity': 0.4
+            },
             'polyline': False,
             'rectangle': False,
             'circle': False,
@@ -205,7 +211,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
             icon=folium.Icon(color="red", icon="utensils", prefix="fa")
         ).add_to(m)
     
-    # 航线
+    # 规划航线
     if points_gcj.get('A') and points_gcj.get('B'):
         folium.PolyLine(
             [[points_gcj['A'][1], points_gcj['A'][0]], 
@@ -255,8 +261,6 @@ def main():
         st.session_state.flight_altitude = 50
     if "flight_history" not in st.session_state:
         st.session_state.flight_history = []
-    if "drawn_polygon" not in st.session_state:
-        st.session_state.drawn_polygon = None
     
     # ==================== 侧边栏 ====================
     st.sidebar.title("🎛️ 导航菜单")
@@ -293,12 +297,11 @@ def main():
     # ==================== 航线规划页面 ====================
     if page == "🗺️ 航线规划":
         st.header("🗺️ 航线规划")
-        
         st.info("""
         ### 📝 操作说明：
         1. **设置起点/终点**：左侧输入框修改图书馆/食堂坐标，点击按钮保存
         2. **圈选障碍物**：点击地图左上角的 **📐 图标** → 选择 **多边形** → 在地图上依次点击圈出建筑物轮廓 → **双击完成**
-        3. **保存障碍物**：绘制完成后，点击下方 **💾 保存当前绘制的多边形** 按钮
+        3. **自动保存**：绘制完成后障碍物会自动保存，侧边栏数字会立即更新
         """)
         
         col1, col2 = st.columns([1, 1.5])
@@ -355,25 +358,6 @@ def main():
             b = st.session_state.points_gcj['B']
             dist = math.sqrt((b[0]-a[0])**2 + (b[1]-a[1])**2) * 111000
             st.caption(f"📏 航线距离: 约 {dist:.0f} 米")
-            
-            st.markdown("---")
-            st.markdown("### 🚧 障碍物操作")
-            
-            # 显示当前待保存的绘图
-            if st.session_state.drawn_polygon:
-                st.info(f"待保存的障碍物: {len(st.session_state.drawn_polygon)} 个点")
-                if st.button("💾 保存当前绘制的多边形", use_container_width=True, type="primary"):
-                    new_name = f"建筑物{len(st.session_state.obstacles_gcj) + 1}"
-                    st.session_state.obstacles_gcj.append({
-                        "name": new_name,
-                        "polygon": st.session_state.drawn_polygon
-                    })
-                    save_obstacles(st.session_state.obstacles_gcj)
-                    st.session_state.drawn_polygon = None
-                    st.success(f"✅ 已添加 {new_name}，当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
-                    st.rerun()
-            else:
-                st.caption("💡 在地图上绘制多边形后，这里会出现「保存」按钮")
         
         with col2:
             st.subheader("🗺️ 规划地图")
@@ -384,25 +368,29 @@ def main():
             
             m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail)
             
-            # 返回所有绘图数据
-            output = st_folium(m, width=700, height=550, returned_objects=["all_drawings"])
+            # 关键：使用 last_active_drawing 获取最新绘制的图形
+            output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             
-            # 获取所有绘制的图形
-            if output and output.get("all_drawings"):
-                drawings = output["all_drawings"]
-                if drawings and len(drawings) > 0:
-                    # 取最后一个绘制的图形
-                    last_draw = drawings[-1]
-                    if last_draw and last_draw.get("geometry"):
-                        geometry = last_draw["geometry"]
-                        if geometry.get("type") == "Polygon":
-                            coords = geometry.get("coordinates", [])
-                            if coords and len(coords) > 0:
-                                polygon_coords = []
-                                for point in coords[0]:
-                                    polygon_coords.append([point[0], point[1]])
-                                if len(polygon_coords) >= 3:
-                                    st.session_state.drawn_polygon = polygon_coords
+            # 处理新绘制的多边形 - 自动保存
+            if output and output.get("last_active_drawing"):
+                last_draw = output["last_active_drawing"]
+                if last_draw and last_draw.get("geometry"):
+                    geometry = last_draw["geometry"]
+                    if geometry.get("type") == "Polygon":
+                        coords = geometry.get("coordinates", [])
+                        if coords and len(coords) > 0:
+                            polygon_coords = []
+                            for point in coords[0]:
+                                polygon_coords.append([point[0], point[1]])
+                            if len(polygon_coords) >= 3:
+                                new_name = f"建筑物{len(st.session_state.obstacles_gcj) + 1}"
+                                st.session_state.obstacles_gcj.append({
+                                    "name": new_name,
+                                    "polygon": polygon_coords
+                                })
+                                save_obstacles(st.session_state.obstacles_gcj)
+                                st.success(f"✅ 已添加 {new_name}，当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
+                                st.rerun()
             
             st.caption("📌 **图例**：📚 绿色=图书馆 | 🍽️ 红色=食堂 | 🔴 红色区域=障碍物 | 🔵 蓝色线=规划航线")
     
