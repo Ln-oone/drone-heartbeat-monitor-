@@ -3,4 +3,3 @@ folium
 streamlit-folium
 pandas
 shapely
-numpy
