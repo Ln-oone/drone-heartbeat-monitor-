@@ -223,42 +223,39 @@ class HeartbeatSimulator:
         self.simulating = True
         self.progress = 0.0
         
-    def update_position(self):
-        """更新位置，返回是否移动了"""
-        if not self.simulating:
-            return False
-        
-        if self.path_index >= len(self.path) - 1:
+    def update_and_generate(self):
+        """更新位置并生成心跳数据"""
+        # 更新位置
+        if self.simulating and self.path_index < len(self.path) - 1:
+            target = self.path[self.path_index + 1]
+            dx = target[0] - self.current_pos[0]
+            dy = target[1] - self.current_pos[1]
+            dist_to_target = math.sqrt(dx*dx + dy*dy)
+            
+            # 动态步长
+            step = 0.0005 + (self.speed / 100) * 0.003
+            
+            if dist_to_target < step:
+                self.current_pos = target.copy()
+                self.path_index += 1
+            else:
+                ratio = step / dist_to_target
+                self.current_pos[0] += dx * ratio
+                self.current_pos[1] += dy * ratio
+            
+            # 更新进度
+            total_waypoints = len(self.path)
+            self.progress = self.path_index / (total_waypoints - 1) if total_waypoints > 1 else 0
+            
+            # 检查是否完成
+            if self.path_index >= len(self.path) - 1:
+                self.simulating = False
+                self.progress = 1.0
+        elif self.path_index >= len(self.path) - 1:
             self.simulating = False
             self.progress = 1.0
-            return False
         
-        target = self.path[self.path_index + 1]
-        dx = target[0] - self.current_pos[0]
-        dy = target[1] - self.current_pos[1]
-        dist_to_target = math.sqrt(dx*dx + dy*dy)
-        
-        # 动态步长，速度越快步长越大
-        step = 0.0005 + (self.speed / 100) * 0.002
-        
-        if dist_to_target < step:
-            # 到达目标点
-            self.current_pos = target.copy()
-            self.path_index += 1
-        else:
-            # 向目标点移动
-            ratio = step / dist_to_target
-            self.current_pos[0] += dx * ratio
-            self.current_pos[1] += dy * ratio
-        
-        # 更新进度
-        total_waypoints = len(self.path)
-        self.progress = self.path_index / (total_waypoints - 1) if total_waypoints > 1 else 0
-        
-        return True
-    
-    def generate_heartbeat(self):
-        """生成一条心跳数据"""
+        # 生成心跳数据
         altitude = self.flight_altitude + random.randint(-5, 5) if self.simulating else random.randint(0, 10)
         speed_display = round(self.speed * 0.15, 1) if self.simulating else 0
         
@@ -477,15 +474,13 @@ def main():
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         
-        # 关键修复：在这里更新位置并生成心跳
+        # 自动更新位置和心跳
         current_time = time.time()
         if st.session_state.simulation_running:
-            # 每0.2秒更新一次位置并刷新页面
+            # 每0.2秒更新一次
             if current_time - st.session_state.last_hb_time >= 0.2:
-                # 更新位置
-                moved = st.session_state.heartbeat_sim.update_position()
-                # 生成心跳数据
-                new_hb = st.session_state.heartbeat_sim.generate_heartbeat()
+                # 更新位置并生成心跳
+                new_hb = st.session_state.heartbeat_sim.update_and_generate()
                 st.session_state.last_hb_time = current_time
                 # 记录轨迹
                 st.session_state.flight_history.append([new_hb['lng'], new_hb['lat']])
@@ -498,21 +493,22 @@ def main():
         else:
             st.session_state.last_hb_time = current_time
         
+        # 显示最新心跳数据
         if st.session_state.heartbeat_sim.history:
             latest = st.session_state.heartbeat_sim.history[0]
             
             # 指标卡片
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("⏰ 时间", latest['timestamp'])
-            c2.metric("📍 纬度", f"{latest['lat']:.6f}")
-            c3.metric("📍 经度", f"{latest['lng']:.6f}")
-            c4.metric("📊 高度", f"{latest['altitude']} m")
-            c5.metric("🔋 电压", f"{latest['voltage']} V")
-            c6.metric("🛰️ 卫星", latest['satellites'])
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            col1.metric("⏰ 时间", latest['timestamp'])
+            col2.metric("📍 纬度", f"{latest['lat']:.6f}")
+            col3.metric("📍 经度", f"{latest['lng']:.6f}")
+            col4.metric("📊 高度", f"{latest['altitude']} m")
+            col5.metric("🔋 电压", f"{latest['voltage']} V")
+            col6.metric("🛰️ 卫星", latest['satellites'])
             
-            c7, c8 = st.columns(2)
-            c7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
-            c8.metric("⚡ 速度系数", f"{drone_speed}%")
+            col7, col8 = st.columns(2)
+            col7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
+            col8.metric("⚡ 速度系数", f"{drone_speed}%")
             
             # 飞行进度条
             progress = latest.get('progress', 0)
@@ -526,36 +522,36 @@ def main():
             # 实时位置地图
             st.subheader("📍 实时位置")
             tiles = GAODE_SATELLITE_URL if map_type == "satellite" else GAODE_VECTOR_URL
-            mon_map = folium.Map(location=[latest['lat'], latest['lng']], zoom_start=17, tiles=tiles, attr="高德地图")
+            monitor_map = folium.Map(location=[latest['lat'], latest['lng']], zoom_start=17, tiles=tiles, attr="高德地图")
             
             # 障碍物
             for obs in st.session_state.obstacles_gcj:
                 coords = obs.get('polygon', [])
                 if coords and len(coords) >= 3:
-                    folium.Polygon([[c[1], c[0]] for c in coords], color="red", weight=2, fill=True, fill_opacity=0.3).add_to(mon_map)
+                    folium.Polygon([[c[1], c[0]] for c in coords], color="red", weight=2, fill=True, fill_opacity=0.3).add_to(monitor_map)
             
             # 规划路径
             if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
-                folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], color="green", weight=3, opacity=0.7, popup="规划航线").add_to(mon_map)
+                folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], color="green", weight=3, opacity=0.7, popup="规划航线").add_to(monitor_map)
             
             # 历史轨迹
             trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng')]
             if len(trail) > 1:
-                folium.PolyLine(trail, color="orange", weight=2, opacity=0.7, popup="历史轨迹").add_to(mon_map)
+                folium.PolyLine(trail, color="orange", weight=2, opacity=0.7, popup="历史轨迹").add_to(monitor_map)
             
             # 当前位置
             folium.Marker([latest['lat'], latest['lng']], popup=f"📍 当前位置\n高度: {latest['altitude']}m", 
-                         icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(mon_map)
+                         icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
             
             # 起点终点
             if st.session_state.points_gcj['A']:
                 folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
-                             popup="🟢 起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(mon_map)
+                             popup="🟢 起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(monitor_map)
             if st.session_state.points_gcj['B']:
                 folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
-                             popup="🔴 终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(mon_map)
+                             popup="🔴 终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(monitor_map)
             
-            folium_static(mon_map, width=800, height=400)
+            folium_static(monitor_map, width=800, height=400)
             
             # 数据图表
             st.subheader("📈 数据图表")
@@ -584,14 +580,13 @@ def main():
             st.info("⏳ 等待心跳数据... 请在「航线规划」页面点击「开始飞行」")
         
         # 控制按钮
-        col_r, col_c = st.columns(2)
-        with col_r:
+        col_refresh, col_clear = st.columns(2)
+        with col_refresh:
             if st.button("🔄 立即刷新", use_container_width=True):
                 if st.session_state.simulation_running:
-                    st.session_state.heartbeat_sim.update_position()
-                    new_hb = st.session_state.heartbeat_sim.generate_heartbeat()
+                    new_hb = st.session_state.heartbeat_sim.update_and_generate()
                     st.rerun()
-        with col_c:
+        with col_clear:
             if st.button("🗑️ 清空历史", use_container_width=True):
                 st.session_state.heartbeat_sim.history = []
                 st.rerun()
@@ -606,9 +601,9 @@ def main():
         with col1:
             if st.session_state.obstacles_gcj:
                 for i, obs in enumerate(st.session_state.obstacles_gcj):
-                    col_n, col_b = st.columns([3, 1])
-                    col_n.write(f"🚧 {obs.get('name', f'障碍物{i+1}')}")
-                    if col_b.button("删除", key=f"del_{i}"):
+                    col_name, col_btn = st.columns([3, 1])
+                    col_name.write(f"🚧 {obs.get('name', f'障碍物{i+1}')}")
+                    if col_btn.button("删除", key=f"del_{i}"):
                         st.session_state.obstacles_gcj.pop(i)
                         save_obstacles(st.session_state.obstacles_gcj)
                         st.session_state.planned_path = create_avoidance_path(st.session_state.points_gcj['A'], st.session_state.points_gcj['B'], st.session_state.obstacles_gcj)
@@ -617,17 +612,17 @@ def main():
                 st.write("暂无障碍物")
             
             st.markdown("---")
-            col_s, col_l = st.columns(2)
-            if col_s.button("💾 保存", use_container_width=True):
+            col_save, col_load = st.columns(2)
+            if col_save.button("💾 保存", use_container_width=True):
                 save_obstacles(st.session_state.obstacles_gcj)
                 st.success("已保存")
-            if col_l.button("📂 加载", use_container_width=True):
+            if col_load.button("📂 加载", use_container_width=True):
                 st.session_state.obstacles_gcj = load_obstacles()
                 st.session_state.planned_path = create_avoidance_path(st.session_state.points_gcj['A'], st.session_state.points_gcj['B'], st.session_state.obstacles_gcj)
                 st.rerun()
             
-            col_cl, col_d = st.columns(2)
-            if col_cl.button("🗑️ 全部清除", use_container_width=True):
+            col_clear_all, col_download = st.columns(2)
+            if col_clear_all.button("🗑️ 全部清除", use_container_width=True):
                 st.session_state.obstacles_gcj = []
                 save_obstacles([])
                 st.session_state.planned_path = create_avoidance_path(st.session_state.points_gcj['A'], st.session_state.points_gcj['B'], [])
