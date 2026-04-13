@@ -253,8 +253,8 @@ class HeartbeatSimulator:
         self.flight_altitude = 50
         self.speed = 50
         self.progress = 0.0
-        self.total_distance = 0.0  # 总路径长度
-        self.distance_traveled = 0.0  # 已飞距离
+        self.total_distance = 0.0
+        self.distance_traveled = 0.0
         
     def set_path(self, path, altitude=50, speed=50):
         self.path = path
@@ -272,7 +272,7 @@ class HeartbeatSimulator:
             self.total_distance += distance(path[i], path[i + 1])
         
     def update_and_generate(self):
-        """更新位置并生成心跳数据，使用距离计算进度"""
+        """更新位置并生成心跳数据"""
         moved = False
         
         if self.simulating and self.path_index < len(self.path) - 1:
@@ -281,24 +281,22 @@ class HeartbeatSimulator:
             dy = target[1] - self.current_pos[1]
             dist_to_target = math.sqrt(dx*dx + dy*dy)
             
-            # 动态步长
-            step = 0.0008 + (self.speed / 100) * 0.005
+            # 调慢速度：步长从原来的 0.0008 + (speed/100)*0.005 改为更小的值
+            # 速度系数10时步长约0.00015，速度系数100时步长约0.00065
+            step = 0.00015 + (self.speed / 100) * 0.0005
             
             if dist_to_target < step:
-                # 到达当前目标点，记录飞过的距离
                 self.distance_traveled += dist_to_target
                 self.current_pos = target.copy()
                 self.path_index += 1
                 moved = True
             else:
-                # 向目标点移动
                 ratio = step / dist_to_target
                 self.current_pos[0] += dx * ratio
                 self.current_pos[1] += dy * ratio
                 self.distance_traveled += step
                 moved = True
             
-            # 基于距离计算进度
             if self.total_distance > 0:
                 self.progress = min(1.0, self.distance_traveled / self.total_distance)
             
@@ -311,7 +309,7 @@ class HeartbeatSimulator:
         
         # 生成心跳数据
         altitude = self.flight_altitude + random.randint(-5, 5) if self.simulating else random.randint(0, 10)
-        speed_display = round(self.speed * 0.2, 1) if self.simulating else 0
+        speed_display = round(self.speed * 0.1, 1) if self.simulating else 0
         
         heartbeat = {
             "timestamp": datetime.now().strftime("%H:%M:%S"),
@@ -412,7 +410,7 @@ def main():
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚡ 无人机速度设置")
-    drone_speed = st.sidebar.slider("飞行速度系数", min_value=10, max_value=100, value=50, step=5)
+    drone_speed = st.sidebar.slider("飞行速度系数", min_value=10, max_value=100, value=50, step=5, help="数值越大，飞行越快")
     
     st.sidebar.markdown("---")
     obs_count = len(st.session_state.obstacles_gcj)
@@ -561,11 +559,9 @@ def main():
             col7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
             col8.metric("⚡ 速度系数", f"{drone_speed}%")
             
-            # 基于距离的进度条
             progress = latest.get('progress', 0)
             st.progress(progress, text=f"✈️ 飞行进度: {progress*100:.1f}%")
             
-            # 显示距离信息
             dist_traveled = latest.get('distance_traveled', 0) * 111000
             total_dist = latest.get('total_distance', 0) * 111000
             st.caption(f"📏 已飞距离: {dist_traveled:.0f} 米 / 总距离: {total_dist:.0f} 米")
