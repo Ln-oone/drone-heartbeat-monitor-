@@ -76,9 +76,8 @@ def transform_lng(lng, lat):
 def out_of_china(lng, lat):
     return not (72.004 <= lng <= 137.8347 and 0.8293 <= lat <= 55.8271)
 
-# ==================== 纯数学路径规划算法 ====================
+# ==================== 路径规划算法 ====================
 def point_in_polygon(point, polygon):
-    """射线法判断点是否在多边形内"""
     x, y = point
     inside = False
     n = len(polygon)
@@ -90,13 +89,11 @@ def point_in_polygon(point, polygon):
     return inside
 
 def segments_intersect(p1, p2, p3, p4):
-    """检查两条线段是否相交"""
     def ccw(A, B, C):
         return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
     return (ccw(p1, p3, p4) != ccw(p2, p3, p4)) and (ccw(p1, p2, p3) != ccw(p1, p2, p4))
 
 def line_intersects_polygon(p1, p2, polygon):
-    """检查线段是否与多边形相交"""
     if point_in_polygon(p1, polygon) or point_in_polygon(p2, polygon):
         return True
     n = len(polygon)
@@ -109,7 +106,6 @@ def line_intersects_polygon(p1, p2, polygon):
     return False
 
 def is_straight_path_blocked(start, end, obstacles_gcj):
-    """检查直线路径是否被障碍物阻挡"""
     for obs in obstacles_gcj:
         coords = obs.get('polygon', [])
         if coords and len(coords) >= 3:
@@ -121,7 +117,6 @@ def distance(p1, p2):
     return math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
 
 def get_polygon_vertices(obstacles_gcj):
-    """获取所有障碍物的顶点"""
     vertices = []
     for obs in obstacles_gcj:
         coords = obs.get('polygon', [])
@@ -136,7 +131,6 @@ def get_polygon_vertices(obstacles_gcj):
     return vertices
 
 def find_shortest_path(start, end, obstacles_gcj):
-    """简化版路径规划：沿障碍物边缘绕行"""
     if not obstacles_gcj:
         return [start, end]
     
@@ -146,7 +140,6 @@ def find_shortest_path(start, end, obstacles_gcj):
     vertices = [start, end]
     vertices.extend(get_polygon_vertices(obstacles_gcj))
     
-    # 去重
     unique = []
     for v in vertices:
         found = False
@@ -160,7 +153,6 @@ def find_shortest_path(start, end, obstacles_gcj):
     best_path = [start, end]
     best_dist = distance(start, end)
     
-    # 尝试单顶点绕行
     for v in unique:
         if v == start or v == end:
             continue
@@ -170,7 +162,6 @@ def find_shortest_path(start, end, obstacles_gcj):
                 best_dist = path_dist
                 best_path = [start, v, end]
     
-    # 尝试双顶点绕行
     for i, v1 in enumerate(unique):
         if v1 == start or v1 == end:
             continue
@@ -222,6 +213,7 @@ class HeartbeatSimulator:
         self.flight_altitude = 50
         self.speed = 50
         self.progress = 0.0
+        self.step_size = 0.002  # 增大步长，让移动更明显
         
     def set_path(self, path, altitude=50, speed=50):
         self.path = path
@@ -231,6 +223,8 @@ class HeartbeatSimulator:
         self.speed = speed
         self.simulating = True
         self.progress = 0.0
+        # 根据速度调整步长
+        self.step_size = 0.001 + (speed / 100) * 0.004
         
     def generate(self):
         if not self.simulating:
@@ -244,25 +238,21 @@ class HeartbeatSimulator:
                 dy = target[1] - self.current_pos[1]
                 dist_to_target = math.sqrt(dx*dx + dy*dy)
                 
-                if dist_to_target < 0.000005:
+                if dist_to_target < self.step_size:
+                    # 直接到达目标点
+                    self.current_pos = target.copy()
                     self.path_index += 1
                 else:
-                    # 根据速度移动
-                    step_scale = self.speed / 25
-                    step = max(0.00001, min(0.0005, step_scale * 0.0001))
-                    if dist_to_target < step:
-                        self.current_pos = target.copy()
-                        self.path_index += 1
-                    else:
-                        ratio = step / dist_to_target
-                        self.current_pos[0] += dx * ratio
-                        self.current_pos[1] += dy * ratio
+                    # 向目标点移动
+                    ratio = self.step_size / dist_to_target
+                    self.current_pos[0] += dx * ratio
+                    self.current_pos[1] += dy * ratio
                 
                 # 计算进度
                 total_waypoints = len(self.path)
                 self.progress = self.path_index / (total_waypoints - 1) if total_waypoints > 1 else 0
-                altitude = self.flight_altitude + random.randint(-5, 5)
-                speed_display = round(self.speed * 0.15, 1)
+                altitude = self.flight_altitude + random.randint(-3, 3)
+                speed_display = round(self.speed * 0.2, 1)
             else:
                 self.simulating = False
                 altitude = random.randint(0, 10)
@@ -278,6 +268,8 @@ class HeartbeatSimulator:
             "satellites": random.randint(8, 14),
             "speed": speed_display,
             "progress": self.progress,
+            "current_waypoint": self.path_index + 1,
+            "total_waypoints": len(self.path)
         }
         
         self.history.insert(0, heartbeat)
@@ -424,7 +416,7 @@ def main():
                     path = st.session_state.planned_path or [st.session_state.points_gcj['A'], st.session_state.points_gcj['B']]
                     st.session_state.heartbeat_sim.set_path(path, st.session_state.flight_altitude, drone_speed)
                     st.session_state.simulation_running = True
-                    st.session_state.flight_history = []  # 清空旧轨迹
+                    st.session_state.flight_history = []
                     st.success("🚁 飞行已开始！请切换到「飞行监控」页面查看进度")
             
             with col_btn2:
@@ -481,13 +473,12 @@ def main():
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         
-        # 自动更新心跳（每秒一次）
+        # 自动更新心跳（每秒2次，更流畅）
         current_time = time.time()
-        if current_time - st.session_state.last_hb_time >= 0.5:  # 0.5秒更新一次，更流畅
+        if current_time - st.session_state.last_hb_time >= 0.3:  # 0.3秒更新一次
             if st.session_state.simulation_running:
                 new_hb = st.session_state.heartbeat_sim.generate()
                 st.session_state.last_hb_time = current_time
-                # 记录轨迹
                 st.session_state.flight_history.append([new_hb['lng'], new_hb['lat']])
                 if len(st.session_state.flight_history) > 200:
                     st.session_state.flight_history.pop(0)
@@ -511,15 +502,14 @@ def main():
             c7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
             c8.metric("⚡ 速度系数", f"{drone_speed}%")
             
-            # 飞行进度条
+            # 飞行进度条 - 关键修复
             progress = latest.get('progress', 0)
             st.progress(progress, text=f"✈️ 飞行进度: {progress*100:.1f}%")
             
             # 显示当前航点信息
-            if st.session_state.heartbeat_sim.path and len(st.session_state.heartbeat_sim.path) > 1:
-                current_idx = st.session_state.heartbeat_sim.path_index
-                total_waypoints = len(st.session_state.heartbeat_sim.path)
-                st.caption(f"📍 当前航点: {current_idx + 1} / {total_waypoints}")
+            current_wp = latest.get('current_waypoint', 1)
+            total_wp = latest.get('total_waypoints', 1)
+            st.caption(f"📍 当前航点: {current_wp} / {total_wp}")
             
             # 实时位置地图
             st.subheader("📍 实时位置")
@@ -586,7 +576,7 @@ def main():
         with col_r:
             if st.button("🔄 立即刷新", use_container_width=True):
                 if st.session_state.simulation_running:
-                    new_hb = st.session_state.heartbeat_sim.generate()
+                    st.session_state.heartbeat_sim.generate()
                     st.rerun()
         with col_c:
             if st.button("🗑️ 清空历史", use_container_width=True):
