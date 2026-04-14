@@ -507,6 +507,8 @@ def main():
         st.session_state.last_flight_altitude = 50
     if "pending_obstacle" not in st.session_state:
         st.session_state.pending_obstacle = None
+    if "pending_height" not in st.session_state:
+        st.session_state.pending_height = 30
     
     # 侧边栏
     st.sidebar.title("🎛️ 导航菜单")
@@ -688,7 +690,7 @@ def main():
             m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail, st.session_state.planned_path, map_type, straight_blocked, flight_alt, drone_pos)
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             
-            # 处理新绘制的多边形 - 弹出高度输入对话框
+            # 处理新绘制的多边形 - 保存到 pending 状态
             if output and output.get("last_active_drawing"):
                 last = output["last_active_drawing"]
                 if last and last.get("geometry") and last["geometry"].get("type") == "Polygon":
@@ -700,25 +702,35 @@ def main():
                             st.rerun()
             
             # 显示高度输入对话框
-            if st.session_state.pending_obstacle:
-                st.info("📝 请为新障碍物设置高度")
-                new_height = st.number_input("障碍物高度 (米)", min_value=1, max_value=200, value=30, step=5, key="pending_height")
+            if st.session_state.pending_obstacle is not None:
+                st.markdown("---")
+                st.subheader("📝 添加新障碍物")
+                st.info(f"已检测到新绘制的多边形，共 {len(st.session_state.pending_obstacle)} 个顶点")
+                
+                new_height = st.number_input("障碍物高度 (米)", min_value=1, max_value=200, value=30, step=5, key="height_input")
+                
                 col_ok, col_cancel = st.columns(2)
                 with col_ok:
-                    if st.button("✅ 确认添加", use_container_width=True):
+                    if st.button("✅ 确认添加", use_container_width=True, type="primary"):
+                        # 添加障碍物
+                        new_name = f"建筑物{len(st.session_state.obstacles_gcj) + 1}"
                         st.session_state.obstacles_gcj.append({
-                            "name": f"建筑物{len(st.session_state.obstacles_gcj)+1}",
+                            "name": new_name,
                             "polygon": st.session_state.pending_obstacle,
                             "height": new_height
                         })
+                        # 保存到文件
                         save_obstacles(st.session_state.obstacles_gcj)
+                        # 重新规划路径
                         st.session_state.planned_path = create_avoidance_path(
                             st.session_state.points_gcj['A'],
                             st.session_state.points_gcj['B'],
                             st.session_state.obstacles_gcj,
                             flight_alt
                         )
+                        # 清空 pending 状态
                         st.session_state.pending_obstacle = None
+                        st.success(f"✅ 已添加 {new_name}，高度 {new_height} 米")
                         st.rerun()
                 with col_cancel:
                     if st.button("❌ 取消", use_container_width=True):
@@ -883,20 +895,20 @@ def main():
                 else:
                     st.warning("无配置文件或文件为空")
         with col_save_load3:
-            if st.button("📥 下载配置文件", use_container_width=True):
-                config_data = {
-                    'obstacles': st.session_state.obstacles_gcj,
-                    'count': len(st.session_state.obstacles_gcj),
-                    'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    'version': 'v12.2'
-                }
-                st.download_button(
-                    label="📥 点击下载",
-                    data=json.dumps(config_data, ensure_ascii=False, indent=2),
-                    file_name=CONFIG_FILE,
-                    mime="application/json",
-                    use_container_width=True
-                )
+            # 生成配置文件数据供下载
+            config_data = {
+                'obstacles': st.session_state.obstacles_gcj,
+                'count': len(st.session_state.obstacles_gcj),
+                'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'version': 'v12.2'
+            }
+            st.download_button(
+                label="📥 下载配置文件",
+                data=json.dumps(config_data, ensure_ascii=False, indent=2),
+                file_name=CONFIG_FILE,
+                mime="application/json",
+                use_container_width=True
+            )
         
         st.markdown("---")
         st.subheader("📝 障碍物列表")
