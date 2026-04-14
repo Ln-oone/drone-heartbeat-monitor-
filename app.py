@@ -82,14 +82,40 @@ def out_of_china(lng, lat):
 # ==================== 距离计算（米）====================
 def distance_in_meters(p1, p2):
     """计算两点之间的距离（米）"""
-    # 纬度方向每度约111km，经度方向随纬度变化
     lat_avg = (p1[1] + p2[1]) / 2
     lng_scale = 111000 * math.cos(math.radians(lat_avg))
     lat_scale = 111000
-    
     dx = (p2[0] - p1[0]) * lng_scale
     dy = (p2[1] - p1[1]) * lat_scale
     return math.sqrt(dx*dx + dy*dy)
+
+def point_to_segment_distance(point, seg_start, seg_end):
+    """计算点到线段的最短距离（米）"""
+    px, py = point
+    x1, y1 = seg_start
+    x2, y2 = seg_end
+    
+    # 计算线段长度平方
+    dx = x2 - x1
+    dy = y2 - y1
+    len_sq = dx*dx + dy*dy
+    
+    if len_sq == 0:
+        # 线段退化为点
+        dist_deg = math.sqrt((px-x1)**2 + (py-y1)**2)
+        return dist_deg * 111000
+    
+    # 计算投影参数t
+    t = ((px - x1) * dx + (py - y1) * dy) / len_sq
+    t = max(0, min(1, t))
+    
+    # 投影点
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    
+    # 距离
+    dist_deg = math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
+    return dist_deg * 111000
 
 # ==================== 避障路径规划算法（考虑高度）====================
 def point_in_polygon(point, polygon):
@@ -281,29 +307,7 @@ def check_safety_radius(drone_pos, obstacles_gcj, flight_altitude):
                 p1 = coords[i]
                 p2 = coords[(i + 1) % len(coords)]
                 
-                # 计算点到线段的距离
-                drone_point = (drone_pos[0], drone_pos[1])
-                p1_point = (p1[0], p1[1])
-                p2_point = (p2[0], p2[1])
-                
-                # 向量计算
-                px = drone_point[0] - p1_point[0]
-                py = drone_point[1] - p1_point[1]
-                qx = p2_point[0] - p1_point[0]
-                qy = p2_point[1] - p1_point[1]
-                
-                dot = px * qx + py * qy
-                len_sq = qx * qx + qy * qy
-                
-                if len_sq > 0:
-                    t = max(0, min(1, dot / len_sq))
-                    proj_x = p1_point[0] + t * qx
-                    proj_y = p1_point[1] + t * qy
-                else:
-                    proj_x, proj_y = p1_point
-                
-                dist_deg = math.sqrt((drone_point[0]-proj_x)**2 + (drone_point[1]-proj_y)**2)
-                dist_m = dist_deg * 111000
+                dist_m = point_to_segment_distance(drone_pos, p1, p2)
                 
                 if dist_m < min_distance:
                     min_distance = dist_m
@@ -476,8 +480,6 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
     
     # 绘制安全半径圆（以无人机为中心）
     if drone_pos:
-        # 将5米转换为度数（约0.000045度）
-        radius_deg = SAFETY_RADIUS_METERS / 111000
         folium.Circle(
             radius=SAFETY_RADIUS_METERS,
             location=[drone_pos[1], drone_pos[0]],
@@ -737,14 +739,18 @@ def main():
         current_time = time.time()
         if st.session_state.simulation_running:
             if current_time - st.session_state.last_hb_time >= 0.2:
-                new_hb = st.session_state.heartbeat_sim.update_and_generate(st.session_state.obstacles_gcj)
-                st.session_state.last_hb_time = current_time
-                st.session_state.flight_history.append([new_hb['lng'], new_hb['lat']])
-                if len(st.session_state.flight_history) > 200:
-                    st.session_state.flight_history.pop(0)
-                if not st.session_state.heartbeat_sim.simulating:
-                    st.session_state.simulation_running = False
-                st.rerun()
+                try:
+                    new_hb = st.session_state.heartbeat_sim.update_and_generate(st.session_state.obstacles_gcj)
+                    st.session_state.last_hb_time = current_time
+                    st.session_state.flight_history.append([new_hb['lng'], new_hb['lat']])
+                    if len(st.session_state.flight_history) > 200:
+                        st.session_state.flight_history.pop(0)
+                    if not st.session_state.heartbeat_sim.simulating:
+                        st.session_state.simulation_running = False
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"更新心跳时出错: {e}")
+                    st.stop()
         else:
             st.session_state.last_hb_time = current_time
         
@@ -849,8 +855,11 @@ def main():
         with col_refresh:
             if st.button("🔄 立即刷新", use_container_width=True):
                 if st.session_state.simulation_running:
-                    st.session_state.heartbeat_sim.update_and_generate(st.session_state.obstacles_gcj)
-                    st.rerun()
+                    try:
+                        st.session_state.heartbeat_sim.update_and_generate(st.session_state.obstacles_gcj)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"刷新失败: {e}")
         with col_clear:
             if st.button("🗑️ 清空历史", use_container_width=True):
                 st.session_state.heartbeat_sim.history = []
