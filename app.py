@@ -80,14 +80,6 @@ def out_of_china(lng, lat):
     return not (72.004 <= lng <= 137.8347 and 0.8293 <= lat <= 55.8271)
 
 # ==================== 距离计算（米）====================
-def distance_in_meters(p1, p2):
-    lat_avg = (p1[1] + p2[1]) / 2
-    lng_scale = 111000 * math.cos(math.radians(lat_avg))
-    lat_scale = 111000
-    dx = (p2[0] - p1[0]) * lng_scale
-    dy = (p2[1] - p1[1]) * lat_scale
-    return math.sqrt(dx*dx + dy*dy)
-
 def point_to_segment_distance(point, seg_start, seg_end):
     px, py = point
     x1, y1 = seg_start
@@ -505,10 +497,6 @@ def main():
         st.session_state.planned_path = None
     if "last_flight_altitude" not in st.session_state:
         st.session_state.last_flight_altitude = 50
-    if "pending_obstacle" not in st.session_state:
-        st.session_state.pending_obstacle = None
-    if "pending_height" not in st.session_state:
-        st.session_state.pending_height = 30
     
     # 侧边栏
     st.sidebar.title("🎛️ 导航菜单")
@@ -584,7 +572,7 @@ def main():
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度，可直接飞越）")
         
-        st.info("📝 点击地图左上角📐图标 → 选择多边形 → 围绕建筑物绘制 → 双击完成 → 在弹出的对话框中输入高度")
+        st.info("📝 点击地图左上角📐图标 → 选择多边形 → 围绕建筑物绘制 → 双击完成 → 在弹出的对话框中输入高度并保存")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -690,7 +678,7 @@ def main():
             m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail, st.session_state.planned_path, map_type, straight_blocked, flight_alt, drone_pos)
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             
-            # 处理新绘制的多边形 - 保存到 pending 状态
+            # 处理新绘制的多边形 - 直接保存到 session_state 并弹出高度输入
             if output and output.get("last_active_drawing"):
                 last = output["last_active_drawing"]
                 if last and last.get("geometry") and last["geometry"].get("type") == "Polygon":
@@ -698,11 +686,13 @@ def main():
                     if coords and len(coords) > 0:
                         poly = [[p[0], p[1]] for p in coords[0]]
                         if len(poly) >= 3:
+                            # 直接保存到 session_state 中的 pending 状态
                             st.session_state.pending_obstacle = poly
+                            st.session_state.show_height_dialog = True
                             st.rerun()
             
             # 显示高度输入对话框
-            if st.session_state.pending_obstacle is not None:
+            if st.session_state.get("show_height_dialog", False) and st.session_state.get("pending_obstacle"):
                 st.markdown("---")
                 st.subheader("📝 添加新障碍物")
                 st.info(f"已检测到新绘制的多边形，共 {len(st.session_state.pending_obstacle)} 个顶点")
@@ -730,11 +720,13 @@ def main():
                         )
                         # 清空 pending 状态
                         st.session_state.pending_obstacle = None
+                        st.session_state.show_height_dialog = False
                         st.success(f"✅ 已添加 {new_name}，高度 {new_height} 米")
                         st.rerun()
                 with col_cancel:
                     if st.button("❌ 取消", use_container_width=True):
                         st.session_state.pending_obstacle = None
+                        st.session_state.show_height_dialog = False
                         st.rerun()
             
             st.caption("📌 **图例**：🟢 绿色=避障航线 | 🔴 红色=需绕行 | 🟠 橙色=可飞越 | 🛡️ 蓝色圆圈=安全半径")
@@ -895,7 +887,6 @@ def main():
                 else:
                     st.warning("无配置文件或文件为空")
         with col_save_load3:
-            # 生成配置文件数据供下载
             config_data = {
                 'obstacles': st.session_state.obstacles_gcj,
                 'count': len(st.session_state.obstacles_gcj),
