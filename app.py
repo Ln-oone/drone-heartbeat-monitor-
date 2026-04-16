@@ -105,10 +105,8 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude):
                 bounds = get_polygon_bounds(coords)
                 if bounds:
                     offset = 0.0002
-                    # 添加左右两个可能的绕行点
                     left_point = [bounds['min_lng'] - offset, bounds['center_lat']]
                     right_point = [bounds['max_lng'] + offset, bounds['center_lat']]
-                    # 计算哪个更近
                     dist_left = distance(start, left_point) + distance(left_point, end)
                     dist_right = distance(start, right_point) + distance(right_point, end)
                     if dist_left < dist_right:
@@ -116,7 +114,6 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude):
                     else:
                         waypoints.append(right_point)
     
-    # 去重并排序
     unique = []
     for wp in waypoints:
         is_unique = True
@@ -164,12 +161,11 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
     return path
 
 def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction):
-    """根据选择的方向创建避障路径"""
     if direction == "向左绕行":
         return find_left_path(start, end, obstacles_gcj, flight_altitude)
     elif direction == "向右绕行":
         return find_right_path(start, end, obstacles_gcj, flight_altitude)
-    else:  # 最佳航线
+    else:
         return find_best_path(start, end, obstacles_gcj, flight_altitude)
 
 # ==================== 障碍物管理 ====================
@@ -289,7 +285,6 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
     )
     m.add_child(draw)
     
-    # 绘制障碍物
     for i, obs in enumerate(obstacles_gcj):
         coords = obs.get('polygon', [])
         height = obs.get('height', 30)
@@ -297,38 +292,30 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
             color = "red" if height > flight_altitude else "orange"
             folium.Polygon([[c[1], c[0]] for c in coords], color=color, weight=3, fill=True, fill_color=color, fill_opacity=0.4, popup=f"🚧 {obs.get('name')}\n高度: {height}m").add_to(m)
     
-    # 起点和终点
     if points_gcj.get('A'):
         folium.Marker([points_gcj['A'][1], points_gcj['A'][0]], popup="🟢 起点", icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(m)
     if points_gcj.get('B'):
         folium.Marker([points_gcj['B'][1], points_gcj['B'][0]], popup="🔴 终点", icon=folium.Icon(color="red", icon="stop", prefix="fa")).add_to(m)
     
-    # 避障航线
     if planned_path and len(planned_path) > 1:
         path_locations = [[p[1], p[0]] for p in planned_path]
-        if direction == "向左绕行":
+        if "向左" in direction:
             line_color = "purple"
-            line_label = "⬅️ 向左绕行航线"
-        elif direction == "向右绕行":
+        elif "向右" in direction:
             line_color = "orange"
-            line_label = "➡️ 向右绕行航线"
         else:
             line_color = "green"
-            line_label = "🔄 最佳航线"
-        folium.PolyLine(path_locations, color=line_color, weight=5, opacity=0.9, popup=line_label).add_to(m)
+        folium.PolyLine(path_locations, color=line_color, weight=5, opacity=0.9, popup=f"✈️ {direction}").add_to(m)
     
-    # 直线航线
     if points_gcj.get('A') and points_gcj.get('B'):
         if not straight_blocked:
             folium.PolyLine([[points_gcj['A'][1], points_gcj['A'][0]], [points_gcj['B'][1], points_gcj['B'][0]]], color="blue", weight=2, opacity=0.5, dash_array='5, 5', popup="直线航线").add_to(m)
         else:
             folium.PolyLine([[points_gcj['A'][1], points_gcj['A'][0]], [points_gcj['B'][1], points_gcj['B'][0]]], color="gray", weight=2, opacity=0.4, dash_array='5, 5', popup="⚠️ 直线被阻挡").add_to(m)
     
-    # 安全半径
     if drone_pos:
         folium.Circle(radius=SAFETY_RADIUS_METERS, location=[drone_pos[1], drone_pos[0]], color="blue", weight=2, fill=True, fill_color="blue", fill_opacity=0.2, popup="🛡️ 安全半径").add_to(m)
     
-    # 历史轨迹
     if flight_history and len(flight_history) > 1:
         trail = [[p[1], p[0]] for p in flight_history if len(p) >= 2]
         if len(trail) > 1:
@@ -383,7 +370,7 @@ def main():
     # ==================== 避障策略（三个选项）====================
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧭 避障策略")
-    st.sidebar.markdown("当无人机高度低于障碍物高度时：")
+    st.sidebar.caption("当无人机高度低于障碍物高度时：")
     
     # 三个选项的 radio 按钮
     avoid_direction = st.sidebar.radio(
@@ -407,7 +394,6 @@ def main():
         need_replan = True
     
     if need_replan:
-        # 提取方向文字（去掉图标）
         if "向左" in avoid_direction:
             dir_value = "向左绕行"
         elif "向右" in avoid_direction:
@@ -469,7 +455,7 @@ def main():
         
         if straight_blocked:
             st.warning(f"⚠️ 有 {high_obstacles} 个障碍物高于飞行高度({flight_alt}m)，已按照「{st.session_state.avoid_direction}」规划航线")
-            st.info(f"🟢 绿色=最佳航线 | 🟣 紫色=向左绕行 | 🟠 橙色=向右绕行")
+            st.info("🟢 绿色=最佳航线 | 🟣 紫色=向左绕行 | 🟠 橙色=向右绕行")
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度）")
         
