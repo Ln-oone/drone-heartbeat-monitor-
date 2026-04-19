@@ -153,9 +153,9 @@ def get_polygon_bounds(polygon):
         'center_lng': center_lng, 'center_lat': center_lat
     }
 
-# ==================== 修复后的三种避障算法 ====================
+# ==================== 修复后的三种避障算法（真正绕过）====================
 def find_left_path(start, end, obstacles_gcj, flight_altitude):
-    """向左绕行：从障碍物左侧绕过，使用多边形最左边的点向左偏移"""
+    """向左绕行：从障碍物左侧绕过，使用多边形左上角或左下角"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -166,7 +166,6 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
     if not blocking_obs:
         return [start, end]
     
-    # 构建绕行路径
     path = [start]
     current = start
     
@@ -175,11 +174,20 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                # 向左绕行：取多边形最左边的点，再向左偏移 0.0006（约66米）
-                offset = 0.0006
-                left_x = bounds['min_lng'] - offset
-                # 使用多边形中心点的纬度
-                waypoint = [left_x, bounds['center_lat']]
+                # 向左绕行：取多边形最左边的点，再向左偏移
+                offset_x = 0.0006  # 约66米
+                offset_y = 0.0003  # 约33米，向上或向下偏移
+                
+                # 计算起点和终点的平均纬度，决定从上还是从下绕
+                avg_lat = (start[1] + end[1]) / 2
+                
+                if avg_lat < bounds['center_lat']:
+                    # 起点和终点偏下，从上方绕过
+                    waypoint = [bounds['min_lng'] - offset_x, bounds['max_lat'] + offset_y]
+                else:
+                    # 起点和终点偏上，从下方绕过
+                    waypoint = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
+                
                 path.append(waypoint)
                 current = waypoint
     
@@ -187,7 +195,7 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude):
-    """向右绕行：从障碍物右侧绕过，使用多边形最右边的点向右偏移"""
+    """向右绕行：从障碍物右侧绕过，使用多边形右上角或右下角"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -206,10 +214,18 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                # 向右绕行：取多边形最右边的点，再向右偏移 0.0006（约66米）
-                offset = 0.0006
-                right_x = bounds['max_lng'] + offset
-                waypoint = [right_x, bounds['center_lat']]
+                offset_x = 0.0006
+                offset_y = 0.0003
+                
+                avg_lat = (start[1] + end[1]) / 2
+                
+                if avg_lat < bounds['center_lat']:
+                    # 起点和终点偏下，从上方绕过
+                    waypoint = [bounds['max_lng'] + offset_x, bounds['max_lat'] + offset_y]
+                else:
+                    # 起点和终点偏上，从下方绕过
+                    waypoint = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
+                
                 path.append(waypoint)
                 current = waypoint
     
@@ -217,11 +233,10 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
     return path
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude):
-    """最佳航线：分别计算左右路径，选择较短且不穿过障碍物的那条"""
+    """最佳航线：分别计算左右路径，选择较短的那条"""
     left_path = find_left_path(start, end, obstacles_gcj, flight_altitude)
     right_path = find_right_path(start, end, obstacles_gcj, flight_altitude)
     
-    # 计算两条路径的长度
     left_len = 0
     for i in range(len(left_path) - 1):
         left_len += distance(left_path[i], left_path[i + 1])
@@ -230,7 +245,6 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude):
     for i in range(len(right_path) - 1):
         right_len += distance(right_path[i], right_path[i + 1])
     
-    # 返回较短的路径
     return left_path if left_len < right_len else right_path
 
 def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction):
@@ -929,3 +943,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
