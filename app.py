@@ -93,16 +93,15 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 绕行算法（紧贴安全半径）====================
+# ==================== 修复后的绕行算法 ====================
 def meters_to_deg(meters, lat=32.23):
     """将米转换为度数（近似）"""
-    # 纬度方向每度约111km，经度方向随纬度变化
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：从障碍物左侧紧贴安全半径绕过"""
+    """向左绕行：从障碍物左侧绕过，使用障碍物顶部或底部"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -120,18 +119,26 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                # 将安全半径转换为度数
                 offset_lng, offset_lat = meters_to_deg(safety_radius)
-                # 向左绕行：取多边形最左边，再向左偏移安全半径
-                # 同时向上偏移一点，确保绕过
-                waypoint = [bounds['min_lng'] - offset_lng, bounds['center_lat']]
+                
+                # 判断应该从上方还是下方绕过
+                # 比较起点和终点的平均纬度与障碍物中心纬度
+                avg_lat = (start[1] + end[1]) / 2
+                
+                if avg_lat > bounds['center_lat']:
+                    # 从上方绕过：使用障碍物顶部
+                    waypoint = [bounds['min_lng'] - offset_lng, bounds['max_lat'] + offset_lat]
+                else:
+                    # 从下方绕过：使用障碍物底部
+                    waypoint = [bounds['min_lng'] - offset_lng, bounds['min_lat'] - offset_lat]
+                
                 path.append(waypoint)
     
     path.append(end)
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：从障碍物右侧紧贴安全半径绕过"""
+    """向右绕行：从障碍物右侧绕过，使用障碍物顶部或底部"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -150,8 +157,16 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
             bounds = get_polygon_bounds(coords)
             if bounds:
                 offset_lng, offset_lat = meters_to_deg(safety_radius)
-                # 向右绕行：取多边形最右边，再向右偏移安全半径
-                waypoint = [bounds['max_lng'] + offset_lng, bounds['center_lat']]
+                
+                avg_lat = (start[1] + end[1]) / 2
+                
+                if avg_lat > bounds['center_lat']:
+                    # 从上方绕过：使用障碍物顶部
+                    waypoint = [bounds['max_lng'] + offset_lng, bounds['max_lat'] + offset_lat]
+                else:
+                    # 从下方绕过：使用障碍物底部
+                    waypoint = [bounds['max_lng'] + offset_lng, bounds['min_lat'] - offset_lat]
+                
                 path.append(waypoint)
     
     path.append(end)
