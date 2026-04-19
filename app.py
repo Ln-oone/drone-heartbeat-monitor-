@@ -93,9 +93,16 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 简化的三种避障算法 ====================
-def find_left_path(start, end, obstacles_gcj, flight_altitude):
-    """向左绕行：先飞到障碍物左上角，再飞到终点"""
+# ==================== 绕行算法（紧贴安全半径）====================
+def meters_to_deg(meters, lat=32.23):
+    """将米转换为度数（近似）"""
+    # 纬度方向每度约111km，经度方向随纬度变化
+    lat_deg = meters / 111000
+    lng_deg = meters / (111000 * math.cos(math.radians(lat)))
+    return lng_deg, lat_deg
+
+def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
+    """向左绕行：从障碍物左侧紧贴安全半径绕过"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -113,16 +120,18 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                offset = 0.0005  # 约55米偏移
-                # 左上角：最小经度向左偏移，最大纬度向上偏移
-                waypoint = [bounds['min_lng'] - offset, bounds['max_lat'] + offset]
+                # 将安全半径转换为度数
+                offset_lng, offset_lat = meters_to_deg(safety_radius)
+                # 向左绕行：取多边形最左边，再向左偏移安全半径
+                # 同时向上偏移一点，确保绕过
+                waypoint = [bounds['min_lng'] - offset_lng, bounds['center_lat']]
                 path.append(waypoint)
     
     path.append(end)
     return path
 
-def find_right_path(start, end, obstacles_gcj, flight_altitude):
-    """向右绕行：先飞到障碍物右上角，再飞到终点"""
+def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
+    """向右绕行：从障碍物右侧紧贴安全半径绕过"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -140,18 +149,18 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                offset = 0.0005
-                # 右上角：最大经度向右偏移，最大纬度向上偏移
-                waypoint = [bounds['max_lng'] + offset, bounds['max_lat'] + offset]
+                offset_lng, offset_lat = meters_to_deg(safety_radius)
+                # 向右绕行：取多边形最右边，再向右偏移安全半径
+                waypoint = [bounds['max_lng'] + offset_lng, bounds['center_lat']]
                 path.append(waypoint)
     
     path.append(end)
     return path
 
-def find_best_path(start, end, obstacles_gcj, flight_altitude):
-    """最佳航线：比较左右路径，选择较短的那条"""
-    left_path = find_left_path(start, end, obstacles_gcj, flight_altitude)
-    right_path = find_right_path(start, end, obstacles_gcj, flight_altitude)
+def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
+    """最佳航线：比较左右路径长度，选择较短的那条"""
+    left_path = find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
+    right_path = find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
     
     left_len = 0
     for i in range(len(left_path) - 1):
@@ -163,13 +172,13 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude):
     
     return left_path if left_len < right_len else right_path
 
-def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction):
+def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction, safety_radius=5):
     if direction == "向左绕行":
-        return find_left_path(start, end, obstacles_gcj, flight_altitude)
+        return find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
     elif direction == "向右绕行":
-        return find_right_path(start, end, obstacles_gcj, flight_altitude)
+        return find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
     else:
-        return find_best_path(start, end, obstacles_gcj, flight_altitude)
+        return find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
 
 # ==================== 障碍物管理 ====================
 def load_obstacles():
@@ -432,7 +441,8 @@ def main():
             st.session_state.points_gcj['B'],
             st.session_state.obstacles_gcj,
             flight_alt,
-            st.session_state.current_direction
+            st.session_state.current_direction,
+            safety_radius
         )
         st.rerun()
     
@@ -464,7 +474,8 @@ def main():
             st.session_state.points_gcj['B'],
             st.session_state.obstacles_gcj,
             flight_alt,
-            st.session_state.current_direction
+            st.session_state.current_direction,
+            safety_radius
         )
         st.rerun()
     
@@ -494,7 +505,8 @@ def main():
                     st.session_state.points_gcj['B'],
                     st.session_state.obstacles_gcj,
                     flight_alt,
-                    st.session_state.current_direction
+                    st.session_state.current_direction,
+                    safety_radius
                 )
                 st.rerun()
             
@@ -508,7 +520,8 @@ def main():
                     st.session_state.points_gcj['B'],
                     st.session_state.obstacles_gcj,
                     flight_alt,
-                    st.session_state.current_direction
+                    st.session_state.current_direction,
+                    safety_radius
                 )
                 st.rerun()
             
@@ -525,7 +538,8 @@ def main():
                         st.session_state.points_gcj['B'],
                         st.session_state.obstacles_gcj,
                         flight_alt,
-                        "最佳航线"
+                        "最佳航线",
+                        safety_radius
                     )
                     st.rerun()
             
@@ -537,7 +551,8 @@ def main():
                         st.session_state.points_gcj['B'],
                         st.session_state.obstacles_gcj,
                         flight_alt,
-                        "向左绕行"
+                        "向左绕行",
+                        safety_radius
                     )
                     st.rerun()
             
@@ -549,7 +564,8 @@ def main():
                         st.session_state.points_gcj['B'],
                         st.session_state.obstacles_gcj,
                         flight_alt,
-                        "向右绕行"
+                        "向右绕行",
+                        safety_radius
                     )
                     st.rerun()
             
@@ -561,7 +577,8 @@ def main():
                     st.session_state.points_gcj['B'],
                     st.session_state.obstacles_gcj,
                     flight_alt,
-                    st.session_state.current_direction
+                    st.session_state.current_direction,
+                    safety_radius
                 )
                 st.success(f"已按照「{st.session_state.current_direction}」规划路径，共 {len(st.session_state.planned_path)} 个航点")
                 st.rerun()
@@ -619,7 +636,8 @@ def main():
                     st.session_state.points_gcj['B'],
                     st.session_state.obstacles_gcj,
                     flight_alt,
-                    st.session_state.current_direction
+                    st.session_state.current_direction,
+                    safety_radius
                 )
             
             drone_pos = st.session_state.heartbeat_sim.current_pos if st.session_state.heartbeat_sim.simulating else None
@@ -659,7 +677,8 @@ def main():
                             st.session_state.points_gcj['B'],
                             st.session_state.obstacles_gcj,
                             flight_alt,
-                            st.session_state.current_direction
+                            st.session_state.current_direction,
+                            safety_radius
                         )
                         st.session_state.pending_obstacle = None
                         st.success(f"✅ 已添加 {new_name}，高度 {new_height} 米")
@@ -790,7 +809,8 @@ def main():
                         st.session_state.points_gcj['B'],
                         st.session_state.obstacles_gcj,
                         flight_alt,
-                        st.session_state.current_direction
+                        st.session_state.current_direction,
+                        safety_radius
                     )
                     st.success(f"已加载 {len(loaded)} 个障碍物")
                     st.rerun()
@@ -824,7 +844,8 @@ def main():
                                     st.session_state.points_gcj['B'],
                                     st.session_state.obstacles_gcj,
                                     flight_alt,
-                                    st.session_state.current_direction
+                                    st.session_state.current_direction,
+                                    safety_radius
                                 )
                                 st.rerun()
                         with col_del:
@@ -836,7 +857,8 @@ def main():
                                     st.session_state.points_gcj['B'],
                                     st.session_state.obstacles_gcj,
                                     flight_alt,
-                                    st.session_state.current_direction
+                                    st.session_state.current_direction,
+                                    safety_radius
                                 )
                                 st.rerun()
             else:
@@ -850,7 +872,8 @@ def main():
                     st.session_state.points_gcj['B'],
                     [],
                     flight_alt,
-                    st.session_state.current_direction
+                    st.session_state.current_direction,
+                    safety_radius
                 )
                 st.rerun()
         
