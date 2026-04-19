@@ -93,7 +93,7 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 修复后的绕行算法 ====================
+# ==================== 修复后的绕行算法（使用两个绕行点）====================
 def meters_to_deg(meters, lat=32.23):
     """将米转换为度数（近似）"""
     lat_deg = meters / 111000
@@ -101,7 +101,7 @@ def meters_to_deg(meters, lat=32.23):
     return lng_deg, lat_deg
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：从障碍物左侧绕过，使用障碍物顶部或底部"""
+    """向左绕行：先垂直移动到障碍物顶部/底部，再水平向左"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -122,23 +122,34 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
                 offset_lng, offset_lat = meters_to_deg(safety_radius)
                 
                 # 判断应该从上方还是下方绕过
-                # 比较起点和终点的平均纬度与障碍物中心纬度
-                avg_lat = (start[1] + end[1]) / 2
-                
-                if avg_lat > bounds['center_lat']:
-                    # 从上方绕过：使用障碍物顶部
-                    waypoint = [bounds['min_lng'] - offset_lng, bounds['max_lat'] + offset_lat]
+                # 比较起点的纬度与障碍物的位置
+                if start[1] > bounds['max_lat']:
+                    # 起点在障碍物上方，从上方绕过
+                    waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
+                    waypoint2 = [bounds['min_lng'] - offset_lng, bounds['max_lat'] + offset_lat]
+                elif start[1] < bounds['min_lat']:
+                    # 起点在障碍物下方，从下方绕过
+                    waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
+                    waypoint2 = [bounds['min_lng'] - offset_lng, bounds['min_lat'] - offset_lat]
                 else:
-                    # 从下方绕过：使用障碍物底部
-                    waypoint = [bounds['min_lng'] - offset_lng, bounds['min_lat'] - offset_lat]
+                    # 起点在障碍物侧面，选择离起点更近的一侧
+                    dist_to_top = abs(start[1] - bounds['max_lat'])
+                    dist_to_bottom = abs(start[1] - bounds['min_lat'])
+                    if dist_to_top < dist_to_bottom:
+                        waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
+                        waypoint2 = [bounds['min_lng'] - offset_lng, bounds['max_lat'] + offset_lat]
+                    else:
+                        waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
+                        waypoint2 = [bounds['min_lng'] - offset_lng, bounds['min_lat'] - offset_lat]
                 
-                path.append(waypoint)
+                path.append(waypoint1)
+                path.append(waypoint2)
     
     path.append(end)
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：从障碍物右侧绕过，使用障碍物顶部或底部"""
+    """向右绕行：先垂直移动到障碍物顶部/底部，再水平向右"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -158,16 +169,24 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
             if bounds:
                 offset_lng, offset_lat = meters_to_deg(safety_radius)
                 
-                avg_lat = (start[1] + end[1]) / 2
-                
-                if avg_lat > bounds['center_lat']:
-                    # 从上方绕过：使用障碍物顶部
-                    waypoint = [bounds['max_lng'] + offset_lng, bounds['max_lat'] + offset_lat]
+                if start[1] > bounds['max_lat']:
+                    waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
+                    waypoint2 = [bounds['max_lng'] + offset_lng, bounds['max_lat'] + offset_lat]
+                elif start[1] < bounds['min_lat']:
+                    waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
+                    waypoint2 = [bounds['max_lng'] + offset_lng, bounds['min_lat'] - offset_lat]
                 else:
-                    # 从下方绕过：使用障碍物底部
-                    waypoint = [bounds['max_lng'] + offset_lng, bounds['min_lat'] - offset_lat]
+                    dist_to_top = abs(start[1] - bounds['max_lat'])
+                    dist_to_bottom = abs(start[1] - bounds['min_lat'])
+                    if dist_to_top < dist_to_bottom:
+                        waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
+                        waypoint2 = [bounds['max_lng'] + offset_lng, bounds['max_lat'] + offset_lat]
+                    else:
+                        waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
+                        waypoint2 = [bounds['max_lng'] + offset_lng, bounds['min_lat'] - offset_lat]
                 
-                path.append(waypoint)
+                path.append(waypoint1)
+                path.append(waypoint2)
     
     path.append(end)
     return path
