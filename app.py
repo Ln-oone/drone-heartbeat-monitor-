@@ -93,9 +93,9 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 修复后的三种避障算法（真正绕过）====================
+# ==================== 三种避障算法 ====================
 def find_left_path(start, end, obstacles_gcj, flight_altitude):
-    """向左绕行：从障碍物左侧绕过，绕行点取上方或下方"""
+    """向左绕行：从障碍物左侧绕过，使用两个绕行点确保不穿过"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -114,29 +114,17 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
             bounds = get_polygon_bounds(coords)
             if bounds:
                 offset_x = 0.0006  # 向左偏移约66米
-                offset_y = 0.0004  # 向上或向下偏移约44米
+                offset_y = 0.0004  # 垂直偏移约44米
                 
-                # 比较起点和终点的纬度，决定从上还是从下绕
-                # 如果起点和终点纬度都高于障碍物，从上方绕过；否则从下方绕过
-                start_above = start[1] > bounds['max_lat']
-                end_above = end[1] > bounds['max_lat']
-                start_below = start[1] < bounds['min_lat']
-                end_below = end[1] < bounds['min_lat']
+                # 判断绕行方向：比较起点和终点的平均纬度与障碍物中心纬度
+                avg_lat = (start[1] + end[1]) / 2
                 
-                if start_above and end_above:
-                    # 都在上方，从上方绕过
+                if avg_lat < bounds['center_lat']:
+                    # 路径偏下，从上方绕过
                     waypoint = [bounds['min_lng'] - offset_x, bounds['max_lat'] + offset_y]
-                elif start_below and end_below:
-                    # 都在下方，从下方绕过
-                    waypoint = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
                 else:
-                    # 一个上一个下，选择离起点更近的一侧
-                    dist_to_top = abs(start[1] - bounds['max_lat'])
-                    dist_to_bottom = abs(start[1] - bounds['min_lat'])
-                    if dist_to_top < dist_to_bottom:
-                        waypoint = [bounds['min_lng'] - offset_x, bounds['max_lat'] + offset_y]
-                    else:
-                        waypoint = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
+                    # 路径偏上，从下方绕过
+                    waypoint = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
                 
                 path.append(waypoint)
     
@@ -144,7 +132,7 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude):
-    """向右绕行：从障碍物右侧绕过，绕行点取上方或下方"""
+    """向右绕行：从障碍物右侧绕过，使用两个绕行点确保不穿过"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -165,22 +153,12 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
                 offset_x = 0.0006
                 offset_y = 0.0004
                 
-                start_above = start[1] > bounds['max_lat']
-                end_above = end[1] > bounds['max_lat']
-                start_below = start[1] < bounds['min_lat']
-                end_below = end[1] < bounds['min_lat']
+                avg_lat = (start[1] + end[1]) / 2
                 
-                if start_above and end_above:
+                if avg_lat < bounds['center_lat']:
                     waypoint = [bounds['max_lng'] + offset_x, bounds['max_lat'] + offset_y]
-                elif start_below and end_below:
-                    waypoint = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
                 else:
-                    dist_to_top = abs(start[1] - bounds['max_lat'])
-                    dist_to_bottom = abs(start[1] - bounds['min_lat'])
-                    if dist_to_top < dist_to_bottom:
-                        waypoint = [bounds['max_lng'] + offset_x, bounds['max_lat'] + offset_y]
-                    else:
-                        waypoint = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
+                    waypoint = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
                 
                 path.append(waypoint)
     
@@ -310,6 +288,38 @@ def point_to_segment_distance_deg(point, seg_start, seg_end):
     proj_y = y1 + t * dy
     
     return math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
+
+def point_to_segment_distance_meters(point, seg_start, seg_end):
+    return point_to_segment_distance_deg(point, seg_start, seg_end) * 111000
+
+def check_safety_radius(drone_pos, obstacles_gcj, flight_altitude, safety_radius):
+    if not drone_pos:
+        return True, None, None
+    
+    min_distance = float('inf')
+    danger_name = None
+    
+    for obs in obstacles_gcj:
+        coords = obs.get('polygon', [])
+        obs_height = obs.get('height', 30)
+        
+        if obs_height <= flight_altitude:
+            continue
+        
+        if coords and len(coords) >= 3:
+            for i in range(len(coords)):
+                p1 = coords[i]
+                p2 = coords[(i + 1) % len(coords)]
+                
+                dist_m = point_to_segment_distance_meters(drone_pos, p1, p2)
+                
+                if dist_m < min_distance:
+                    min_distance = dist_m
+                    danger_name = obs.get('name', '障碍物')
+    
+    if min_distance < safety_radius:
+        return False, min_distance, danger_name
+    return True, min_distance if min_distance != float('inf') else None, None
 
 # ==================== 创建地图 ====================
 def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None, map_type="satellite", straight_blocked=True, flight_altitude=50, drone_pos=None, direction="最佳航线", safety_radius=5):
