@@ -154,40 +154,8 @@ def get_polygon_bounds(polygon):
     }
 
 # ==================== 修复后的三种避障算法 ====================
-def find_best_path(start, end, obstacles_gcj, flight_altitude):
-    """最佳航线：分别计算左右两侧的路径，选择较短且不穿过障碍物的那条"""
-    
-    # 收集需要绕行的障碍物
-    blocking_obs = []
-    for obs in obstacles_gcj:
-        if obs.get('height', 30) > flight_altitude:
-            coords = obs.get('polygon', [])
-            if coords and line_intersects_polygon(start, end, coords):
-                blocking_obs.append(obs)
-    
-    if not blocking_obs:
-        return [start, end]
-    
-    # 计算左侧绕行路径和右侧绕行路径
-    left_path = find_left_path(start, end, obstacles_gcj, flight_altitude)
-    right_path = find_right_path(start, end, obstacles_gcj, flight_altitude)
-    
-    # 计算两条路径的长度
-    left_length = 0
-    for i in range(len(left_path) - 1):
-        left_length += distance(left_path[i], left_path[i + 1])
-    
-    right_length = 0
-    for i in range(len(right_path) - 1):
-        right_length += distance(right_path[i], right_path[i + 1])
-    
-    # 返回较短的路径
-    return left_path if left_length < right_length else right_path
-
 def find_left_path(start, end, obstacles_gcj, flight_altitude):
-    """向左绕行：从障碍物左侧足够远的地方绕过，确保每一段都不穿过障碍物"""
-    
-    # 收集需要绕行的障碍物
+    """向左绕行：从障碍物左侧绕过，使用多边形最左边的点向左偏移"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -207,44 +175,19 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                # 向左绕行：取多边形左侧再向左偏移较大距离
-                offset = 0.0005  # 约55米偏移，确保不碰到障碍物
-                left_point = [bounds['min_lng'] - offset, bounds['center_lat']]
-                
-                # 确保 current -> left_point 不穿过障碍物
-                if line_intersects_polygon(current, left_point, coords):
-                    # 如果直接连接会穿过，添加一个更高的绕行点
-                    # 向上偏移再向左
-                    up_left_point = [bounds['min_lng'] - offset, bounds['max_lat'] + offset]
-                    if not line_intersects_polygon(current, up_left_point, coords):
-                        path.append(up_left_point)
-                        current = up_left_point
-                        path.append(left_point)
-                        current = left_point
-                    else:
-                        # 向下偏移再向左
-                        down_left_point = [bounds['min_lng'] - offset, bounds['min_lat'] - offset]
-                        path.append(down_left_point)
-                        current = down_left_point
-                        path.append(left_point)
-                        current = left_point
-                else:
-                    path.append(left_point)
-                    current = left_point
-    
-    # 确保最后一段不穿过障碍物
-    if line_intersects_polygon(current, end, blocking_obs[0].get('polygon', [])):
-        # 如果会穿过，添加一个中间点
-        mid_point = [(current[0] + end[0]) / 2, (current[1] + end[1]) / 2]
-        path.append(mid_point)
+                # 向左绕行：取多边形最左边的点，再向左偏移 0.0006（约66米）
+                offset = 0.0006
+                left_x = bounds['min_lng'] - offset
+                # 使用多边形中心点的纬度
+                waypoint = [left_x, bounds['center_lat']]
+                path.append(waypoint)
+                current = waypoint
     
     path.append(end)
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude):
-    """向右绕行：从障碍物右侧足够远的地方绕过，确保每一段都不穿过障碍物"""
-    
-    # 收集需要绕行的障碍物
+    """向右绕行：从障碍物右侧绕过，使用多边形最右边的点向右偏移"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -255,7 +198,6 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
     if not blocking_obs:
         return [start, end]
     
-    # 构建绕行路径
     path = [start]
     current = start
     
@@ -264,37 +206,32 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                # 向右绕行：取多边形右侧再向右偏移较大距离
-                offset = 0.0005  # 约55米偏移，确保不碰到障碍物
-                right_point = [bounds['max_lng'] + offset, bounds['center_lat']]
-                
-                # 确保 current -> right_point 不穿过障碍物
-                if line_intersects_polygon(current, right_point, coords):
-                    # 如果直接连接会穿过，添加一个更高的绕行点
-                    up_right_point = [bounds['max_lng'] + offset, bounds['max_lat'] + offset]
-                    if not line_intersects_polygon(current, up_right_point, coords):
-                        path.append(up_right_point)
-                        current = up_right_point
-                        path.append(right_point)
-                        current = right_point
-                    else:
-                        # 向下偏移再向右
-                        down_right_point = [bounds['max_lng'] + offset, bounds['min_lat'] - offset]
-                        path.append(down_right_point)
-                        current = down_right_point
-                        path.append(right_point)
-                        current = right_point
-                else:
-                    path.append(right_point)
-                    current = right_point
-    
-    # 确保最后一段不穿过障碍物
-    if line_intersects_polygon(current, end, blocking_obs[0].get('polygon', [])):
-        mid_point = [(current[0] + end[0]) / 2, (current[1] + end[1]) / 2]
-        path.append(mid_point)
+                # 向右绕行：取多边形最右边的点，再向右偏移 0.0006（约66米）
+                offset = 0.0006
+                right_x = bounds['max_lng'] + offset
+                waypoint = [right_x, bounds['center_lat']]
+                path.append(waypoint)
+                current = waypoint
     
     path.append(end)
     return path
+
+def find_best_path(start, end, obstacles_gcj, flight_altitude):
+    """最佳航线：分别计算左右路径，选择较短且不穿过障碍物的那条"""
+    left_path = find_left_path(start, end, obstacles_gcj, flight_altitude)
+    right_path = find_right_path(start, end, obstacles_gcj, flight_altitude)
+    
+    # 计算两条路径的长度
+    left_len = 0
+    for i in range(len(left_path) - 1):
+        left_len += distance(left_path[i], left_path[i + 1])
+    
+    right_len = 0
+    for i in range(len(right_path) - 1):
+        right_len += distance(right_path[i], right_path[i + 1])
+    
+    # 返回较短的路径
+    return left_path if left_len < right_len else right_path
 
 def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction):
     if direction == "向左绕行":
