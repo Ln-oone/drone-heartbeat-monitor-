@@ -19,7 +19,7 @@ DEFAULT_A_GCJ = [118.746956, 32.232945]   # 图书馆
 DEFAULT_B_GCJ = [118.751589, 32.235204]   # 食堂
 
 CONFIG_FILE = "obstacle_config.json"
-SAFETY_RADIUS_METERS = 5
+DEFAULT_SAFETY_RADIUS_METERS = 5  # 默认安全半径 5 米
 
 # 高德地图瓦片地址
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
@@ -78,6 +78,69 @@ def line_intersects_polygon(p1, p2, polygon):
 
 def distance(p1, p2):
     return math.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
+
+def distance_in_meters(p1, p2):
+    """计算两点之间的距离（米）"""
+    lat_avg = (p1[1] + p2[1]) / 2
+    lng_scale = 111000 * math.cos(math.radians(lat_avg))
+    lat_scale = 111000
+    dx = (p2[0] - p1[0]) * lng_scale
+    dy = (p2[1] - p1[1]) * lat_scale
+    return math.sqrt(dx*dx + dy*dy)
+
+def point_to_segment_distance_meters(point, seg_start, seg_end):
+    """计算点到线段的最短距离（米）"""
+    px, py = point
+    x1, y1 = seg_start
+    x2, y2 = seg_end
+    
+    dx = x2 - x1
+    dy = y2 - y1
+    len_sq = dx*dx + dy*dy
+    
+    if len_sq == 0:
+        dist_deg = math.sqrt((px-x1)**2 + (py-y1)**2)
+        return dist_deg * 111000
+    
+    t = ((px - x1) * dx + (py - y1) * dy) / len_sq
+    t = max(0, min(1, t))
+    
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    
+    dist_deg = math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
+    return dist_deg * 111000
+
+def check_safety_radius(drone_pos, obstacles_gcj, flight_altitude, safety_radius):
+    """检查无人机安全半径内是否有障碍物"""
+    if not drone_pos:
+        return True, None, None
+    
+    min_distance = float('inf')
+    danger_name = None
+    
+    for obs in obstacles_gcj:
+        coords = obs.get('polygon', [])
+        obs_height = obs.get('height', 30)
+        
+        # 只检查高于飞行高度的障碍物
+        if obs_height <= flight_altitude:
+            continue
+        
+        if coords and len(coords) >= 3:
+            for i in range(len(coords)):
+                p1 = coords[i]
+                p2 = coords[(i + 1) % len(coords)]
+                
+                dist_m = point_to_segment_distance_meters(drone_pos, p1, p2)
+                
+                if dist_m < min_distance:
+                    min_distance = dist_m
+                    danger_name = obs.get('name', '障碍物')
+    
+    if min_distance < safety_radius:
+        return False, min_distance, danger_name
+    return True, min_distance if min_distance != float('inf') else None, None
 
 def get_polygon_bounds(polygon):
     if not polygon:
@@ -202,20 +265,29 @@ class HeartbeatSimulator:
         self.progress = 0.0
         self.total_distance = 0.0
         self.distance_traveled = 0.0
+        self.safety_radius = DEFAULT_SAFETY_RADIUS_METERS
+        self.safety_violation = False
         
-    def set_path(self, path, altitude=50, speed=50):
+    def set_path(self, path, altitude=50, speed=50, safety_radius=5):
         self.path = path
         self.path_index = 0
         self.current_pos = path[0].copy()
         self.flight_altitude = altitude
         self.speed = speed
+        self.safety_radius = safety_radius
         self.simulating = True
         self.progress = 0.0
         self.distance_traveled = 0.0
+        self.safety_violation = False
         
         self.total_distance = 0.0
         for i in range(len(path) - 1):
             self.total_distance += distance(path[i], path[i + 1])
+    
+    def check_safety(self, obstacles_gcj):
+        is_safe, dist, name = check_safety_radius(self.current_pos, obstacles_gcj, self.flight_altitude, self.safety_radius)
+        self.safety_violation = not is_safe
+        return is_safe, dist, name
         
     def update_and_generate(self, obstacles_gcj):
         if self.simulating and self.path_index < len(self.path) - 1:
@@ -246,6 +318,9 @@ class HeartbeatSimulator:
             self.simulating = False
             self.progress = 1.0
         
+        # 检查安全半径
+        is_safe, danger_dist, danger_name = self.check_safety(obstacles_gcj)
+        
         altitude = self.flight_altitude + random.randint(-5, 5) if self.simulating else random.randint(0, 10)
         speed_display = round(self.speed * 0.15, 1) if self.simulating else 0
         
@@ -257,7 +332,11 @@ class HeartbeatSimulator:
             "voltage": round(random.uniform(11.5, 12.8), 1),
             "satellites": random.randint(8, 14),
             "speed": speed_display,
-            "progress": self.progress
+            "progress": self.progress,
+            "safety_status": "✅ 安全" if is_safe else "⚠️ 危险",
+            "safety_distance": danger_dist,
+            "safety_danger": danger_name,
+            "safety_violation": not is_safe
         }
         
         self.history.insert(0, heartbeat)
@@ -267,7 +346,7 @@ class HeartbeatSimulator:
         return heartbeat
 
 # ==================== 创建地图 ====================
-def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None, map_type="satellite", straight_blocked=True, flight_altitude=50, drone_pos=None, direction="最佳航线"):
+def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None, map_type="satellite", straight_blocked=True, flight_altitude=50, drone_pos=None, direction="最佳航线", safety_radius=5):
     if map_type == "satellite":
         tiles = GAODE_SATELLITE_URL
         attr = "高德卫星地图"
@@ -313,8 +392,18 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         else:
             folium.PolyLine([[points_gcj['A'][1], points_gcj['A'][0]], [points_gcj['B'][1], points_gcj['B'][0]]], color="gray", weight=2, opacity=0.4, dash_array='5, 5', popup="⚠️ 直线被阻挡").add_to(m)
     
+    # 安全半径圆
     if drone_pos:
-        folium.Circle(radius=SAFETY_RADIUS_METERS, location=[drone_pos[1], drone_pos[0]], color="blue", weight=2, fill=True, fill_color="blue", fill_opacity=0.2, popup="🛡️ 安全半径").add_to(m)
+        folium.Circle(
+            radius=safety_radius,
+            location=[drone_pos[1], drone_pos[0]],
+            color="blue",
+            weight=2,
+            fill=True,
+            fill_color="blue",
+            fill_opacity=0.2,
+            popup=f"🛡️ 安全半径: {safety_radius}米"
+        ).add_to(m)
     
     if flight_history and len(flight_history) > 1:
         trail = [[p[1], p[0]] for p in flight_history if len(p) >= 2]
@@ -352,6 +441,8 @@ def main():
         st.session_state.pending_obstacle = None
     if "current_direction" not in st.session_state:
         st.session_state.current_direction = "最佳航线"
+    if "safety_radius" not in st.session_state:
+        st.session_state.safety_radius = DEFAULT_SAFETY_RADIUS_METERS
     
     # ==================== 侧边栏 ====================
     st.sidebar.title("🎛️ 导航菜单")
@@ -366,6 +457,14 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("✈️ 无人机飞行高度")
     flight_alt = st.sidebar.slider("飞行高度 (m)", min_value=10, max_value=200, value=10, step=5)
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🛡️ 安全半径设置")
+    safety_radius = st.sidebar.slider("安全半径 (米)", min_value=1, max_value=20, value=st.session_state.safety_radius, step=1, help="无人机周围的安全区域，障碍物进入此区域会触发警报")
+    
+    # 更新安全半径
+    if safety_radius != st.session_state.safety_radius:
+        st.session_state.safety_radius = safety_radius
     
     # 检查飞行高度变化
     if flight_alt != st.session_state.last_flight_altitude:
@@ -397,7 +496,8 @@ def main():
         f"🚧 障碍物: {obs_count} 个\n"
         f"📈 高于飞行高度: {high_obstacles} 个\n"
         f"📌 直线路径: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}\n"
-        f"✈️ 飞行高度: {flight_alt} m"
+        f"✈️ 飞行高度: {flight_alt} m\n"
+        f"🛡️ 安全半径: {safety_radius} 米"
     )
     
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
@@ -458,7 +558,6 @@ def main():
             # ==================== 路径规划 + 绕行方向选择 ====================
             st.markdown("#### 🤖 路径规划")
             
-            # 绕行方向选择（三个按钮）
             st.markdown("**选择绕行方向：**")
             col_dir1, col_dir2, col_dir3 = st.columns(3)
             
@@ -498,10 +597,8 @@ def main():
                     )
                     st.rerun()
             
-            # 显示当前选中的策略
             st.info(f"📌 当前绕行策略: **{st.session_state.current_direction}**")
             
-            # 重新规划按钮
             if st.button("🔄 重新规划路径", use_container_width=True):
                 st.session_state.planned_path = create_avoidance_path(
                     st.session_state.points_gcj['A'],
@@ -517,15 +614,16 @@ def main():
             st.metric("当前飞行高度", f"{flight_alt} m")
             st.metric("速度系数", f"{drone_speed}%")
             st.metric("当前策略", st.session_state.current_direction)
+            st.metric("🛡️ 安全半径", f"{safety_radius} 米")
             
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("▶️ 开始飞行", use_container_width=True):
                     path = st.session_state.planned_path or [st.session_state.points_gcj['A'], st.session_state.points_gcj['B']]
-                    st.session_state.heartbeat_sim.set_path(path, flight_alt, drone_speed)
+                    st.session_state.heartbeat_sim.set_path(path, flight_alt, drone_speed, safety_radius)
                     st.session_state.simulation_running = True
                     st.session_state.flight_history = []
-                    st.success(f"🚁 飞行已开始！按照「{st.session_state.current_direction}」飞行")
+                    st.success(f"🚁 飞行已开始！按照「{st.session_state.current_direction}」飞行，安全半径 {safety_radius}米")
             
             with col_btn2:
                 if st.button("⏹️ 停止飞行", use_container_width=True):
@@ -552,9 +650,9 @@ def main():
             st.subheader("🗺️ 规划地图")
             if straight_blocked:
                 st.caption(f"当前避障策略: {st.session_state.current_direction}")
-                st.caption("🟢 绿色=最佳航线 | 🟣 紫色=向左绕行 | 🟠 橙色=向右绕行")
+                st.caption("🟢 绿色=最佳航线 | 🟣 紫色=向左绕行 | 🟠 橙色=向右绕行 | 🔵 蓝色圆圈=安全半径")
             else:
-                st.caption("✅ 直线畅通")
+                st.caption("✅ 直线畅通 | 🔵 蓝色圆圈=安全半径")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] or SCHOOL_CENTER_GCJ
@@ -570,7 +668,7 @@ def main():
             
             drone_pos = st.session_state.heartbeat_sim.current_pos if st.session_state.heartbeat_sim.simulating else None
             
-            m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail, st.session_state.planned_path, map_type, straight_blocked, flight_alt, drone_pos, st.session_state.current_direction)
+            m = create_planning_map(center, st.session_state.points_gcj, st.session_state.obstacles_gcj, flight_trail, st.session_state.planned_path, map_type, straight_blocked, flight_alt, drone_pos, st.session_state.current_direction, safety_radius)
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             
             # 处理新绘制的多边形
@@ -617,12 +715,12 @@ def main():
                         st.session_state.pending_obstacle = None
                         st.rerun()
             
-            st.caption("📌 **图例**：🟢 绿色=最佳航线 | 🟣 紫色=向左绕行 | 🟠 橙色=向右绕行 | 🔴 红色=需绕行")
+            st.caption("📌 **图例**：🟢 绿色=最佳航线 | 🟣 紫色=向左绕行 | 🟠 橙色=向右绕行 | 🔴 红色=需绕行 | 🔵 蓝色圆圈=安全半径")
     
     # ==================== 飞行监控页面 ====================
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
-        st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction}")
+        st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {safety_radius} 米")
         
         current_time = time.time()
         if st.session_state.simulation_running:
@@ -643,6 +741,15 @@ def main():
         
         if st.session_state.heartbeat_sim.history:
             latest = st.session_state.heartbeat_sim.history[0]
+            
+            # 安全状态警告
+            if latest.get('safety_violation', False):
+                st.error(f"⚠️ **安全警告！** 无人机距离 {latest.get('safety_danger', '障碍物')} 仅 {latest.get('safety_distance', 0):.1f} 米，已进入安全半径({safety_radius}米)内！")
+            else:
+                if latest.get('safety_distance'):
+                    st.success(f"✅ **安全状态**：距离最近障碍物 {latest.get('safety_distance', 0):.1f} 米（安全半径 {safety_radius} 米）")
+                else:
+                    st.success(f"✅ **安全状态**：周围无障碍物（安全半径 {safety_radius} 米）")
             
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             col1.metric("⏰ 时间", latest['timestamp'])
@@ -679,13 +786,23 @@ def main():
                     line_color = "green"
                 folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], color=line_color, weight=3, opacity=0.7).add_to(monitor_map)
             
-            folium.Circle(radius=SAFETY_RADIUS_METERS, location=[latest['lat'], latest['lng']], color="blue", weight=2, fill=True, fill_color="blue", fill_opacity=0.2).add_to(monitor_map)
+            # 安全半径圆
+            folium.Circle(
+                radius=safety_radius,
+                location=[latest['lat'], latest['lng']],
+                color="blue",
+                weight=2,
+                fill=True,
+                fill_color="blue",
+                fill_opacity=0.2,
+                popup=f"🛡️ 安全半径: {safety_radius}米"
+            ).add_to(monitor_map)
             
             trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng')]
             if len(trail) > 1:
                 folium.PolyLine(trail, color="orange", weight=2, opacity=0.7).add_to(monitor_map)
             
-            folium.Marker([latest['lat'], latest['lng']], popup=f"当前位置", icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
+            folium.Marker([latest['lat'], latest['lng']], popup=f"当前位置\n安全状态: {latest.get('safety_status', '未知')}", icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
             
             if st.session_state.points_gcj['A']:
                 folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], popup="起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(monitor_map)
@@ -712,7 +829,7 @@ def main():
         st.header("🚧 障碍物管理")
         
         st.subheader("💾 一键保存/加载")
-        st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物")
+        st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物 | 🛡️ 安全半径: {safety_radius} 米")
         
         col_save_load1, col_save_load2, col_save_load3 = st.columns(3)
         with col_save_load1:
