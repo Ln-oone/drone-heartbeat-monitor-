@@ -93,9 +93,9 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 三种避障算法（使用两个绕行点确保不穿过）====================
+# ==================== 简化的三种避障算法 ====================
 def find_left_path(start, end, obstacles_gcj, flight_altitude):
-    """向左绕行：从障碍物左侧绕过，使用两个绕行点"""
+    """向左绕行：先飞到障碍物左上角，再飞到终点"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -113,29 +113,16 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                offset_x = 0.0008  # 向左偏移约88米
-                offset_y = 0.0005  # 垂直偏移约55米
-                
-                # 判断应该从上方还是下方绕过
-                avg_lat = (start[1] + end[1]) / 2
-                
-                if avg_lat > bounds['center_lat']:
-                    # 从上方绕过：先向上，再向左
-                    waypoint1 = [start[0], bounds['max_lat'] + offset_y]
-                    waypoint2 = [bounds['min_lng'] - offset_x, bounds['max_lat'] + offset_y]
-                else:
-                    # 从下方绕过：先向下，再向左
-                    waypoint1 = [start[0], bounds['min_lat'] - offset_y]
-                    waypoint2 = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
-                
-                path.append(waypoint1)
-                path.append(waypoint2)
+                offset = 0.0005  # 约55米偏移
+                # 左上角：最小经度向左偏移，最大纬度向上偏移
+                waypoint = [bounds['min_lng'] - offset, bounds['max_lat'] + offset]
+                path.append(waypoint)
     
     path.append(end)
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude):
-    """向右绕行：从障碍物右侧绕过，使用两个绕行点"""
+    """向右绕行：先飞到障碍物右上角，再飞到终点"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -153,28 +140,16 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                offset_x = 0.0008
-                offset_y = 0.0005
-                
-                avg_lat = (start[1] + end[1]) / 2
-                
-                if avg_lat > bounds['center_lat']:
-                    # 从上方绕过：先向上，再向右
-                    waypoint1 = [start[0], bounds['max_lat'] + offset_y]
-                    waypoint2 = [bounds['max_lng'] + offset_x, bounds['max_lat'] + offset_y]
-                else:
-                    # 从下方绕过：先向下，再向右
-                    waypoint1 = [start[0], bounds['min_lat'] - offset_y]
-                    waypoint2 = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
-                
-                path.append(waypoint1)
-                path.append(waypoint2)
+                offset = 0.0005
+                # 右上角：最大经度向右偏移，最大纬度向上偏移
+                waypoint = [bounds['max_lng'] + offset, bounds['max_lat'] + offset]
+                path.append(waypoint)
     
     path.append(end)
     return path
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude):
-    """最佳航线：分别计算左右路径，选择较短的那条"""
+    """最佳航线：比较左右路径，选择较短的那条"""
     left_path = find_left_path(start, end, obstacles_gcj, flight_altitude)
     right_path = find_right_path(start, end, obstacles_gcj, flight_altitude)
     
