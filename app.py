@@ -427,7 +427,7 @@ def main():
         with col1:
             st.subheader("🎮 控制面板")
             
-            st.markdown("#### 🟢 起点 A (图书馆)")
+            st.markdown("#### 🟢 起点 A")
             a_lat = st.number_input("纬度", value=st.session_state.points_gcj['A'][1], format="%.6f", key="a_lat")
             a_lng = st.number_input("经度", value=st.session_state.points_gcj['A'][0], format="%.6f", key="a_lng")
             if st.button("📍 设置 A 点", use_container_width=True):
@@ -441,7 +441,7 @@ def main():
                 )
                 st.rerun()
             
-            st.markdown("#### 🔴 终点 B (食堂)")
+            st.markdown("#### 🔴 终点 B")
             b_lat = st.number_input("纬度", value=st.session_state.points_gcj['B'][1], format="%.6f", key="b_lat")
             b_lng = st.number_input("经度", value=st.session_state.points_gcj['B'][0], format="%.6f", key="b_lng")
             if st.button("📍 设置 B 点", use_container_width=True):
@@ -681,7 +681,7 @@ def main():
             
             folium.Circle(radius=SAFETY_RADIUS_METERS, location=[latest['lat'], latest['lng']], color="blue", weight=2, fill=True, fill_color="blue", fill_opacity=0.2).add_to(monitor_map)
             
-            trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng']]
+            trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] if hb.get('lat') and hb.get('lng')]
             if len(trail) > 1:
                 folium.PolyLine(trail, color="orange", weight=2, opacity=0.7).add_to(monitor_map)
             
