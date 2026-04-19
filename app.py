@@ -93,9 +93,9 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 三种避障算法（修复版 - 真正绕过）====================
+# ==================== 三种避障算法（使用两个绕行点确保不穿过）====================
 def find_left_path(start, end, obstacles_gcj, flight_altitude):
-    """向左绕行：从障碍物左侧绕过，绕行点取上方或下方"""
+    """向左绕行：从障碍物左侧绕过，使用两个绕行点"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -113,27 +113,29 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude):
         if coords and len(coords) >= 3:
             bounds = get_polygon_bounds(coords)
             if bounds:
-                offset_x = 0.0008  # 向左偏移约88米，确保完全在左侧
+                offset_x = 0.0008  # 向左偏移约88米
                 offset_y = 0.0005  # 垂直偏移约55米
                 
                 # 判断应该从上方还是下方绕过
-                # 计算起点和终点的平均纬度
                 avg_lat = (start[1] + end[1]) / 2
                 
                 if avg_lat > bounds['center_lat']:
-                    # 路径偏上，从上方绕过
-                    waypoint = [bounds['min_lng'] - offset_x, bounds['max_lat'] + offset_y]
+                    # 从上方绕过：先向上，再向左
+                    waypoint1 = [start[0], bounds['max_lat'] + offset_y]
+                    waypoint2 = [bounds['min_lng'] - offset_x, bounds['max_lat'] + offset_y]
                 else:
-                    # 路径偏下，从下方绕过
-                    waypoint = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
+                    # 从下方绕过：先向下，再向左
+                    waypoint1 = [start[0], bounds['min_lat'] - offset_y]
+                    waypoint2 = [bounds['min_lng'] - offset_x, bounds['min_lat'] - offset_y]
                 
-                path.append(waypoint)
+                path.append(waypoint1)
+                path.append(waypoint2)
     
     path.append(end)
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude):
-    """向右绕行：从障碍物右侧绕过，绕行点取上方或下方"""
+    """向右绕行：从障碍物右侧绕过，使用两个绕行点"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -157,11 +159,16 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude):
                 avg_lat = (start[1] + end[1]) / 2
                 
                 if avg_lat > bounds['center_lat']:
-                    waypoint = [bounds['max_lng'] + offset_x, bounds['max_lat'] + offset_y]
+                    # 从上方绕过：先向上，再向右
+                    waypoint1 = [start[0], bounds['max_lat'] + offset_y]
+                    waypoint2 = [bounds['max_lng'] + offset_x, bounds['max_lat'] + offset_y]
                 else:
-                    waypoint = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
+                    # 从下方绕过：先向下，再向右
+                    waypoint1 = [start[0], bounds['min_lat'] - offset_y]
+                    waypoint2 = [bounds['max_lng'] + offset_x, bounds['min_lat'] - offset_y]
                 
-                path.append(waypoint)
+                path.append(waypoint1)
+                path.append(waypoint2)
     
     path.append(end)
     return path
