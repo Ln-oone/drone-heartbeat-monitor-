@@ -93,7 +93,7 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 修复后的绕行算法（使用两个绕行点）====================
+# ==================== 修复后的绕行算法（三个绕行点）====================
 def meters_to_deg(meters, lat=32.23):
     """将米转换为度数（近似）"""
     lat_deg = meters / 111000
@@ -101,7 +101,7 @@ def meters_to_deg(meters, lat=32.23):
     return lng_deg, lat_deg
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：先垂直移动到障碍物顶部/底部，再水平向左"""
+    """向左绕行：使用三个绕行点确保不穿过障碍物"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -127,10 +127,12 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
                     # 起点在障碍物上方，从上方绕过
                     waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
                     waypoint2 = [bounds['min_lng'] - offset_lng, bounds['max_lat'] + offset_lat]
+                    waypoint3 = [end[0], bounds['max_lat'] + offset_lat]
                 elif start[1] < bounds['min_lat']:
                     # 起点在障碍物下方，从下方绕过
                     waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
                     waypoint2 = [bounds['min_lng'] - offset_lng, bounds['min_lat'] - offset_lat]
+                    waypoint3 = [end[0], bounds['min_lat'] - offset_lat]
                 else:
                     # 起点在障碍物侧面，选择离起点更近的一侧
                     dist_to_top = abs(start[1] - bounds['max_lat'])
@@ -138,18 +140,21 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
                     if dist_to_top < dist_to_bottom:
                         waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
                         waypoint2 = [bounds['min_lng'] - offset_lng, bounds['max_lat'] + offset_lat]
+                        waypoint3 = [end[0], bounds['max_lat'] + offset_lat]
                     else:
                         waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
                         waypoint2 = [bounds['min_lng'] - offset_lng, bounds['min_lat'] - offset_lat]
+                        waypoint3 = [end[0], bounds['min_lat'] - offset_lat]
                 
                 path.append(waypoint1)
                 path.append(waypoint2)
+                path.append(waypoint3)
     
     path.append(end)
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：先垂直移动到障碍物顶部/底部，再水平向右"""
+    """向右绕行：使用三个绕行点确保不穿过障碍物"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -172,21 +177,26 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
                 if start[1] > bounds['max_lat']:
                     waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
                     waypoint2 = [bounds['max_lng'] + offset_lng, bounds['max_lat'] + offset_lat]
+                    waypoint3 = [end[0], bounds['max_lat'] + offset_lat]
                 elif start[1] < bounds['min_lat']:
                     waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
                     waypoint2 = [bounds['max_lng'] + offset_lng, bounds['min_lat'] - offset_lat]
+                    waypoint3 = [end[0], bounds['min_lat'] - offset_lat]
                 else:
                     dist_to_top = abs(start[1] - bounds['max_lat'])
                     dist_to_bottom = abs(start[1] - bounds['min_lat'])
                     if dist_to_top < dist_to_bottom:
                         waypoint1 = [start[0], bounds['max_lat'] + offset_lat]
                         waypoint2 = [bounds['max_lng'] + offset_lng, bounds['max_lat'] + offset_lat]
+                        waypoint3 = [end[0], bounds['max_lat'] + offset_lat]
                     else:
                         waypoint1 = [start[0], bounds['min_lat'] - offset_lat]
                         waypoint2 = [bounds['max_lng'] + offset_lng, bounds['min_lat'] - offset_lat]
+                        waypoint3 = [end[0], bounds['min_lat'] - offset_lat]
                 
                 path.append(waypoint1)
                 path.append(waypoint2)
+                path.append(waypoint3)
     
     path.append(end)
     return path
