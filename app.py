@@ -93,30 +93,14 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 自适应绕行算法 ====================
+# ==================== 绕行算法 ====================
 def meters_to_deg(meters, lat=32.23):
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
-def path_intersects_any_obstacle(path, obstacles_gcj, flight_altitude):
-    """检查路径是否与任何障碍物相交"""
-    for i in range(len(path) - 1):
-        p1 = path[i]
-        p2 = path[i + 1]
-        for obs in obstacles_gcj:
-            if obs.get('height', 30) > flight_altitude:
-                coords = obs.get('polygon', [])
-                if coords and line_intersects_polygon(p1, p2, coords):
-                    return True
-    return False
-
-def get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left", max_waypoints=5):
-    """
-    在障碍物的一侧生成多个绕行点
-    side: "left" 或 "right"
-    """
-    # 获取所有需要绕行的障碍物
+def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
+    """向左绕行：从障碍物左侧绕过，绕行点放在障碍物上方或下方（修复版）"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -127,7 +111,7 @@ def get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left
     if not blocking_obs:
         return [start, end]
     
-    # 获取所有障碍物的边界
+    # 获取所有阻挡障碍物的边界
     min_lng_all = float('inf')
     max_lng_all = -float('inf')
     min_lat_all = float('inf')
@@ -146,54 +130,63 @@ def get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left
     if min_lng_all == float('inf'):
         return [start, end]
     
-    offset_lng, offset_lat = meters_to_deg(DEFAULT_SAFETY_RADIUS_METERS * 3)
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3)
     
-    # 基础偏移
-    if side == "left":
-        base_x = min_lng_all - offset_lng * 3
+    # 向左绕行：经度取最左侧向左偏移
+    left_x = min_lng_all - offset_lng * 3
+    
+    # 判断从上方还是下方绕过
+    # 比较起点和终点的平均纬度与障碍物的中心纬度
+    avg_lat = (start[1] + end[1]) / 2
+    center_lat = (min_lat_all + max_lat_all) / 2
+    
+    if avg_lat < center_lat:
+        # 路径偏下，从上方绕过
+        waypoint = [left_x, max_lat_all + offset_lat]
     else:
-        base_x = max_lng_all + offset_lng * 3
+        # 路径偏上，从下方绕过
+        waypoint = [left_x, min_lat_all - offset_lat]
     
-    # 根据障碍物的高度范围，生成多个绕行点
-    waypoints = []
-    
-    # 障碍物的垂直范围
-    lat_range = max_lat_all - min_lat_all
-    step = lat_range / (max_waypoints + 1)
-    
-    # 从下方到上方生成多个点
-    for i in range(1, max_waypoints + 1):
-        lat = min_lat_all + step * i
-        waypoints.append([base_x, lat])
-    
-    return waypoints
-
-def find_adaptive_path(start, end, obstacles_gcj, flight_altitude, side="left"):
-    """
-    自适应路径规划：根据障碍物复杂程度自动增加绕行点
-    """
-    # 先尝试1个绕行点
-    for num_points in range(1, 6):
-        waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, num_points)
-        
-        # 构建完整路径
-        full_path = [start] + waypoints + [end]
-        
-        # 检查是否穿过障碍物
-        if not path_intersects_any_obstacle(full_path, obstacles_gcj, flight_altitude):
-            return full_path
-    
-    # 如果都失败，返回带所有点的路径
-    waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, 10)
-    return [start] + waypoints + [end]
-
-def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：自适应生成绕行点"""
-    return find_adaptive_path(start, end, obstacles_gcj, flight_altitude, "left")
+    return [start, waypoint, end]
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：自适应生成绕行点"""
-    return find_adaptive_path(start, end, obstacles_gcj, flight_altitude, "right")
+    """向右绕行：从障碍物右侧绕过（原版，使用中垂线）"""
+    blocking_obs = []
+    for obs in obstacles_gcj:
+        if obs.get('height', 30) > flight_altitude:
+            coords = obs.get('polygon', [])
+            if coords and line_intersects_polygon(start, end, coords):
+                blocking_obs.append(obs)
+    
+    if not blocking_obs:
+        return [start, end]
+    
+    # 计算中点
+    mid_x = (start[0] + end[0]) / 2
+    mid_y = (start[1] + end[1]) / 2
+    
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length = math.sqrt(dx*dx + dy*dy)
+    
+    if length == 0:
+        return [start, end]
+    
+    # 垂直向量（向右）
+    perp_x = dy / length
+    perp_y = -dx / length
+    
+    offset_dist = safety_radius * 10  # 约50米偏移
+    lat_rad = math.radians(mid_y)
+    lng_scale = 111000 * math.cos(lat_rad)
+    lat_scale = 111000
+    
+    offset_x = perp_x * offset_dist / lng_scale
+    offset_y = perp_y * offset_dist / lat_scale
+    
+    waypoint = [mid_x + offset_x, mid_y + offset_y]
+    
+    return [start, waypoint, end]
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     left_path = find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
