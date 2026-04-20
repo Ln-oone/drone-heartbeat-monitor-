@@ -93,17 +93,13 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 中垂线绕行算法（修复版）====================
+# ==================== 中垂线绕行算法 ====================
 def meters_to_deg(meters, lat=32.23):
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
 def get_perpendicular_point(start, end, distance_meters, direction="left"):
-    """
-    获取起点和终点连线中垂线上的点
-    direction: "left" 或 "right"
-    """
     mid_x = (start[0] + end[0]) / 2
     mid_y = (start[1] + end[1]) / 2
     
@@ -114,7 +110,6 @@ def get_perpendicular_point(start, end, distance_meters, direction="left"):
     if length == 0:
         return [mid_x, mid_y]
     
-    # 垂直向量
     if direction == "left":
         perp_x = -dy / length
         perp_y = dx / length
@@ -122,7 +117,6 @@ def get_perpendicular_point(start, end, distance_meters, direction="left"):
         perp_x = dy / length
         perp_y = -dx / length
     
-    # 将距离转换为度数
     lat_rad = math.radians(mid_y)
     lng_scale = 111000 * math.cos(lat_rad)
     lat_scale = 111000
@@ -132,11 +126,9 @@ def get_perpendicular_point(start, end, distance_meters, direction="left"):
     
     return [mid_x + offset_x, mid_y + offset_y]
 
-def find_clear_perpendicular_point(start, end, obstacles_gcj, direction, safety_radius=5, max_attempts=30):
-    """
-    寻找一个能绕过所有障碍物的中垂线点
-    从近到远尝试不同距离
-    """
+def find_clear_perpendicular_point(start, end, obstacles_gcj, flight_altitude, direction, safety_radius=5, max_attempts=30):
+    """寻找能绕过所有障碍物的中垂线点"""
+    # 收集需要绕行的障碍物
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -147,11 +139,9 @@ def find_clear_perpendicular_point(start, end, obstacles_gcj, direction, safety_
     if not blocking_obs:
         return None
     
-    # 计算障碍物的大致范围，确定最小偏移距离
     min_offset = safety_radius * 5  # 最小25米
     max_offset = safety_radius * 30  # 最大150米
     
-    # 尝试不同的偏移距离
     for offset_mult in range(5, max_attempts + 1):
         offset_dist = min_offset * (offset_mult / 5)
         if offset_dist > max_offset:
@@ -159,7 +149,6 @@ def find_clear_perpendicular_point(start, end, obstacles_gcj, direction, safety_
         
         waypoint = get_perpendicular_point(start, end, offset_dist, direction)
         
-        # 检查路径是否与任何障碍物相交
         valid = True
         for obs in blocking_obs:
             coords = obs.get('polygon', [])
@@ -171,11 +160,9 @@ def find_clear_perpendicular_point(start, end, obstacles_gcj, direction, safety_
         if valid:
             return waypoint
     
-    # 如果都失败，返回最大偏移的点
     return get_perpendicular_point(start, end, max_offset, direction)
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：中垂线向左偏移"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -186,14 +173,13 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     if not blocking_obs:
         return [start, end]
     
-    waypoint = find_clear_perpendicular_point(start, end, obstacles_gcj, "left", safety_radius)
+    waypoint = find_clear_perpendicular_point(start, end, obstacles_gcj, flight_altitude, "left", safety_radius)
     if waypoint is None:
         return [start, end]
     
     return [start, waypoint, end]
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：中垂线向右偏移"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -204,7 +190,7 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
     if not blocking_obs:
         return [start, end]
     
-    waypoint = find_clear_perpendicular_point(start, end, obstacles_gcj, "right", safety_radius)
+    waypoint = find_clear_perpendicular_point(start, end, obstacles_gcj, flight_altitude, "right", safety_radius)
     if waypoint is None:
         return [start, end]
     
