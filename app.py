@@ -20,6 +20,7 @@ DEFAULT_B_GCJ = [118.751589, 32.235204]
 
 CONFIG_FILE = "obstacle_config.json"
 DEFAULT_SAFETY_RADIUS_METERS = 5
+MIN_WAYPOINTS = 3  # 最小绕行点数量
 
 # 高德地图瓦片地址
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
@@ -93,15 +94,15 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 最短路径绕行算法 ====================
+# ==================== 自适应绕行算法（至少3个点）====================
 def meters_to_deg(meters, lat=32.23):
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
-def get_shortest_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left"):
+def get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left", num_points=3):
     """
-    获取最短路径的绕行点（沿障碍物边界）
+    在障碍物的一侧生成指定数量的绕行点
     """
     blocking_obs = []
     for obs in obstacles_gcj:
@@ -111,90 +112,88 @@ def get_shortest_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, s
                 blocking_obs.append(obs)
     
     if not blocking_obs:
-        return [start, end]
+        return []
     
-    # 获取所有障碍物的边界点
-    boundary_points = []
+    # 获取所有障碍物的边界
+    min_lng_all = float('inf')
+    max_lng_all = -float('inf')
+    min_lat_all = float('inf')
+    max_lat_all = -float('inf')
+    
     for obs in blocking_obs:
         coords = obs.get('polygon', [])
         if coords:
-            for pt in coords:
-                boundary_points.append(pt)
+            bounds = get_polygon_bounds(coords)
+            if bounds:
+                min_lng_all = min(min_lng_all, bounds['min_lng'])
+                max_lng_all = max(max_lng_all, bounds['max_lng'])
+                min_lat_all = min(min_lat_all, bounds['min_lat'])
+                max_lat_all = max(max_lat_all, bounds['max_lat'])
     
-    if not boundary_points:
-        return [start, end]
+    if min_lng_all == float('inf'):
+        return []
     
     offset_lng, offset_lat = meters_to_deg(DEFAULT_SAFETY_RADIUS_METERS * 2)
     
-    # 根据方向选择偏移
+    # 根据方向确定经度
     if side == "left":
-        # 向左偏移：取边界点的最小经度向左偏移
-        min_lng = min(p[0] for p in boundary_points)
-        offset_x = min_lng - offset_lng * 2
-        # 筛选左侧的边界点
-        side_points = [[offset_x, p[1]] for p in boundary_points]
+        base_x = min_lng_all - offset_lng * 2
     else:
-        # 向右偏移：取边界点的最大经度向右偏移
-        max_lng = max(p[0] for p in boundary_points)
-        offset_x = max_lng + offset_lng * 2
-        side_points = [[offset_x, p[1]] for p in boundary_points]
+        base_x = max_lng_all + offset_lng * 2
     
-    # 添加起点和终点
-    all_points = [start] + side_points + [end]
+    # 生成多个绕行点（至少3个，均匀分布在障碍物高度范围内）
+    waypoints = []
     
-    # 按距离起点的顺序排序（贪心算法找最短路径）
-    path = [start]
-    current = start
-    remaining = [p for p in all_points if p != start and p != end]
+    # 在障碍物的垂直范围内均匀分布点
+    for i in range(num_points):
+        t = (i + 1) / (num_points + 1)  # 避开边界
+        lat = min_lat_all + t * (max_lat_all - min_lat_all)
+        waypoints.append([base_x, lat])
     
-    while remaining:
-        # 找到离当前点最近且不穿过障碍物的点
-        best = None
-        best_dist = float('inf')
-        for p in remaining:
-            # 检查是否可见（直线不穿过障碍物）
-            visible = True
-            for obs in blocking_obs:
-                coords = obs.get('polygon', [])
-                if coords and line_intersects_polygon(current, p, coords):
-                    visible = False
-                    break
-            if visible:
-                dist = distance(current, p)
-                if dist < best_dist:
-                    best_dist = dist
-                    best = p
+    return waypoints
+
+def find_adaptive_path(start, end, obstacles_gcj, flight_altitude, side="left"):
+    """
+    自适应路径规划：至少使用 MIN_WAYPOINTS 个绕行点
+    """
+    # 从最小点数开始尝试，逐步增加直到路径不穿过障碍物
+    for num_points in range(MIN_WAYPOINTS, MIN_WAYPOINTS + 10):
+        waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, num_points)
         
-        if best:
-            path.append(best)
-            current = best
-            remaining.remove(best)
-        else:
-            break
+        if not waypoints:
+            return [start, end]
+        
+        # 构建完整路径
+        full_path = [start] + waypoints + [end]
+        
+        # 检查是否穿过障碍物
+        intersects = False
+        for i in range(len(full_path) - 1):
+            p1 = full_path[i]
+            p2 = full_path[i + 1]
+            for obs in obstacles_gcj:
+                if obs.get('height', 30) > flight_altitude:
+                    coords = obs.get('polygon', [])
+                    if coords and line_intersects_polygon(p1, p2, coords):
+                        intersects = True
+                        break
+            if intersects:
+                break
+        
+        if not intersects:
+            return full_path
     
-    path.append(end)
-    
-    # 简化路径（去除共线的点）
-    simplified = [path[0]]
-    for i in range(1, len(path) - 1):
-        prev = simplified[-1]
-        curr = path[i]
-        nxt = path[i + 1]
-        # 检查是否可以跳过当前点
-        if not line_intersects_polygon(prev, nxt, blocking_obs[0].get('polygon', [])):
-            continue
-        simplified.append(curr)
-    simplified.append(path[-1])
-    
-    return simplified
+    # 如果都失败，返回带最多点的路径
+    waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, MIN_WAYPOINTS + 10)
+    return [start] + waypoints + [end]
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：最短路径"""
-    return get_shortest_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, "left")
+    """向左绕行：至少3个绕行点"""
+    return find_adaptive_path(start, end, obstacles_gcj, flight_altitude, "left")
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：最短路径"""
-    return get_shortest_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, "right")
+    """向右绕行：至少3个绕行点"""
+    return find_adaptive_path(start, end, obstacles_gcj, flight_altitude, "right")
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     left_path = find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
@@ -609,6 +608,11 @@ def main():
             
             st.info(f"📌 当前绕行策略: **{st.session_state.current_direction}**")
             
+            # 显示绕行点数量
+            if st.session_state.planned_path:
+                waypoint_count = len(st.session_state.planned_path) - 2
+                st.info(f"📍 当前绕行点数量: **{waypoint_count}** 个")
+            
             if st.button("🔄 重新规划路径", use_container_width=True):
                 st.session_state.planned_path = create_avoidance_path(
                     st.session_state.points_gcj['A'],
@@ -618,7 +622,8 @@ def main():
                     st.session_state.current_direction,
                     safety_radius
                 )
-                st.success(f"已按照「{st.session_state.current_direction}」规划路径，共 {len(st.session_state.planned_path)} 个航点")
+                waypoint_count = len(st.session_state.planned_path) - 2
+                st.success(f"已按照「{st.session_state.current_direction}」规划路径，共 {len(st.session_state.planned_path)} 个航点（含 {waypoint_count} 个绕行点）")
                 st.rerun()
             
             st.markdown("#### ✈️ 飞行参数")
@@ -830,7 +835,7 @@ def main():
         st.header("🚧 障碍物管理")
         
         st.subheader("💾 一键保存/加载")
-        st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物 | 🛡️ 安全半径: {safety_radius} 米")
+        st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物 | 🛡️ 安全半径: {safety_radius} 米 | 📍 最小绕行点: {MIN_WAYPOINTS} 个")
         
         col_save_load1, col_save_load2, col_save_load3 = st.columns(3)
         with col_save_load1:
