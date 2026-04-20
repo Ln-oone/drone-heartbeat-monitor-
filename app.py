@@ -93,14 +93,14 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 绕行算法（修复版 - 不穿过障碍物）====================
+# ==================== 绕行算法 ====================
 def meters_to_deg(meters, lat=32.23):
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：从障碍物左侧绕过，绕行点放在障碍物上方或下方"""
+    """向左绕行：从障碍物左侧绕过，绕行点放在障碍物上方或下方（修复版）"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -150,7 +150,7 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     return [start, waypoint, end]
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：从障碍物右侧绕过，绕行点放在障碍物上方或下方"""
+    """向右绕行：从障碍物右侧绕过（原版，使用中垂线）"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -161,36 +161,30 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
     if not blocking_obs:
         return [start, end]
     
-    min_lng_all = float('inf')
-    max_lng_all = -float('inf')
-    min_lat_all = float('inf')
-    max_lat_all = -float('inf')
+    # 计算中点
+    mid_x = (start[0] + end[0]) / 2
+    mid_y = (start[1] + end[1]) / 2
     
-    for obs in blocking_obs:
-        coords = obs.get('polygon', [])
-        if coords:
-            bounds = get_polygon_bounds(coords)
-            if bounds:
-                min_lng_all = min(min_lng_all, bounds['min_lng'])
-                max_lng_all = max(max_lng_all, bounds['max_lng'])
-                min_lat_all = min(min_lat_all, bounds['min_lat'])
-                max_lat_all = max(max_lat_all, bounds['max_lat'])
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length = math.sqrt(dx*dx + dy*dy)
     
-    if max_lng_all == -float('inf'):
+    if length == 0:
         return [start, end]
     
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 3)
+    # 垂直向量（向右）
+    perp_x = dy / length
+    perp_y = -dx / length
     
-    # 向右绕行：经度取最右侧向右偏移
-    right_x = max_lng_all + offset_lng * 3
+    offset_dist = safety_radius * 10  # 约50米偏移
+    lat_rad = math.radians(mid_y)
+    lng_scale = 111000 * math.cos(lat_rad)
+    lat_scale = 111000
     
-    avg_lat = (start[1] + end[1]) / 2
-    center_lat = (min_lat_all + max_lat_all) / 2
+    offset_x = perp_x * offset_dist / lng_scale
+    offset_y = perp_y * offset_dist / lat_scale
     
-    if avg_lat < center_lat:
-        waypoint = [right_x, max_lat_all + offset_lat]
-    else:
-        waypoint = [right_x, min_lat_all - offset_lat]
+    waypoint = [mid_x + offset_x, mid_y + offset_y]
     
     return [start, waypoint, end]
 
