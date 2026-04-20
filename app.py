@@ -20,7 +20,10 @@ DEFAULT_B_GCJ = [118.751589, 32.235204]
 
 CONFIG_FILE = "obstacle_config.json"
 DEFAULT_SAFETY_RADIUS_METERS = 5
-MIN_WAYPOINTS = 3  # 最小绕行点数量
+
+# 绕行点数量范围
+MIN_WAYPOINTS = 2
+MAX_WAYPOINTS = 5
 
 # 高德地图瓦片地址
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
@@ -94,7 +97,7 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 自适应绕行算法（至少3个点）====================
+# ==================== 绕行算法（2-5个绕行点）====================
 def meters_to_deg(meters, lat=32.23):
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
@@ -141,12 +144,10 @@ def get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left
     else:
         base_x = max_lng_all + offset_lng * 2
     
-    # 生成多个绕行点（至少3个，均匀分布在障碍物高度范围内）
+    # 生成绕行点（均匀分布在障碍物高度范围内）
     waypoints = []
-    
-    # 在障碍物的垂直范围内均匀分布点
     for i in range(num_points):
-        t = (i + 1) / (num_points + 1)  # 避开边界
+        t = (i + 1) / (num_points + 1)
         lat = min_lat_all + t * (max_lat_all - min_lat_all)
         waypoints.append([base_x, lat])
     
@@ -154,10 +155,20 @@ def get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side="left
 
 def find_adaptive_path(start, end, obstacles_gcj, flight_altitude, side="left"):
     """
-    自适应路径规划：至少使用 MIN_WAYPOINTS 个绕行点
+    自适应路径规划：绕行点数量在2-5之间
     """
-    # 从最小点数开始尝试，逐步增加直到路径不穿过障碍物
-    for num_points in range(MIN_WAYPOINTS, MIN_WAYPOINTS + 10):
+    # 根据障碍物数量决定初始绕行点数量
+    obs_count = len([obs for obs in obstacles_gcj if obs.get('height', 30) > flight_altitude])
+    
+    if obs_count == 0:
+        return [start, end]
+    elif obs_count <= 2:
+        start_points = MIN_WAYPOINTS
+    else:
+        start_points = min(MAX_WAYPOINTS, MIN_WAYPOINTS + obs_count // 2)
+    
+    # 从起始点数开始尝试，逐步增加直到路径不穿过障碍物
+    for num_points in range(start_points, MAX_WAYPOINTS + 1):
         waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, num_points)
         
         if not waypoints:
@@ -184,15 +195,15 @@ def find_adaptive_path(start, end, obstacles_gcj, flight_altitude, side="left"):
             return full_path
     
     # 如果都失败，返回带最多点的路径
-    waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, MIN_WAYPOINTS + 10)
+    waypoints = get_waypoints_on_side(start, end, obstacles_gcj, flight_altitude, side, MAX_WAYPOINTS)
     return [start] + waypoints + [end]
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：至少3个绕行点"""
+    """向左绕行：2-5个绕行点"""
     return find_adaptive_path(start, end, obstacles_gcj, flight_altitude, "left")
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：至少3个绕行点"""
+    """向右绕行：2-5个绕行点"""
     return find_adaptive_path(start, end, obstacles_gcj, flight_altitude, "right")
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
@@ -611,7 +622,7 @@ def main():
             # 显示绕行点数量
             if st.session_state.planned_path:
                 waypoint_count = len(st.session_state.planned_path) - 2
-                st.info(f"📍 当前绕行点数量: **{waypoint_count}** 个")
+                st.info(f"📍 当前绕行点数量: **{waypoint_count}** 个（范围 {MIN_WAYPOINTS}-{MAX_WAYPOINTS}）")
             
             if st.button("🔄 重新规划路径", use_container_width=True):
                 st.session_state.planned_path = create_avoidance_path(
@@ -835,7 +846,7 @@ def main():
         st.header("🚧 障碍物管理")
         
         st.subheader("💾 一键保存/加载")
-        st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物 | 🛡️ 安全半径: {safety_radius} 米 | 📍 最小绕行点: {MIN_WAYPOINTS} 个")
+        st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物 | 🛡️ 安全半径: {safety_radius} 米 | 📍 绕行点范围: {MIN_WAYPOINTS}-{MAX_WAYPOINTS} 个")
         
         col_save_load1, col_save_load2, col_save_load3 = st.columns(3)
         with col_save_load1:
