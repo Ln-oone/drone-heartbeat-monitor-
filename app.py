@@ -93,7 +93,7 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 中垂线绕行算法 ====================
+# ==================== 中垂线绕行算法（修复版）====================
 def meters_to_deg(meters, lat=32.23):
     lat_deg = meters / 111000
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
@@ -102,22 +102,19 @@ def meters_to_deg(meters, lat=32.23):
 def get_perpendicular_point(start, end, distance_meters, direction="left"):
     """
     获取起点和终点连线中垂线上的点
-    direction: "left" 或 "right"，表示垂直于连线向左或向右
+    direction: "left" 或 "right"
     """
-    # 计算中点
     mid_x = (start[0] + end[0]) / 2
     mid_y = (start[1] + end[1]) / 2
     
-    # 计算连线方向向量
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     
-    # 计算垂直向量（单位向量）
     length = math.sqrt(dx*dx + dy*dy)
     if length == 0:
         return [mid_x, mid_y]
     
-    # 垂直向量（顺时针或逆时针）
+    # 垂直向量
     if direction == "left":
         perp_x = -dy / length
         perp_y = dx / length
@@ -126,22 +123,59 @@ def get_perpendicular_point(start, end, distance_meters, direction="left"):
         perp_y = -dx / length
     
     # 将距离转换为度数
-    offset_lng, offset_lat = meters_to_deg(distance_meters)
-    
-    # 计算垂直方向上的偏移（按经度纬度比例）
-    # 使用中点的纬度来估算
     lat_rad = math.radians(mid_y)
     lng_scale = 111000 * math.cos(lat_rad)
     lat_scale = 111000
     
-    # 垂直向量分量对应的偏移度数
     offset_x = perp_x * distance_meters / lng_scale
     offset_y = perp_y * distance_meters / lat_scale
     
     return [mid_x + offset_x, mid_y + offset_y]
 
+def find_clear_perpendicular_point(start, end, obstacles_gcj, direction, safety_radius=5, max_attempts=30):
+    """
+    寻找一个能绕过所有障碍物的中垂线点
+    从近到远尝试不同距离
+    """
+    blocking_obs = []
+    for obs in obstacles_gcj:
+        if obs.get('height', 30) > flight_altitude:
+            coords = obs.get('polygon', [])
+            if coords and line_intersects_polygon(start, end, coords):
+                blocking_obs.append(obs)
+    
+    if not blocking_obs:
+        return None
+    
+    # 计算障碍物的大致范围，确定最小偏移距离
+    min_offset = safety_radius * 5  # 最小25米
+    max_offset = safety_radius * 30  # 最大150米
+    
+    # 尝试不同的偏移距离
+    for offset_mult in range(5, max_attempts + 1):
+        offset_dist = min_offset * (offset_mult / 5)
+        if offset_dist > max_offset:
+            offset_dist = max_offset
+        
+        waypoint = get_perpendicular_point(start, end, offset_dist, direction)
+        
+        # 检查路径是否与任何障碍物相交
+        valid = True
+        for obs in blocking_obs:
+            coords = obs.get('polygon', [])
+            if coords:
+                if line_intersects_polygon(start, waypoint, coords) or line_intersects_polygon(waypoint, end, coords):
+                    valid = False
+                    break
+        
+        if valid:
+            return waypoint
+    
+    # 如果都失败，返回最大偏移的点
+    return get_perpendicular_point(start, end, max_offset, direction)
+
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：使用中垂线，绕行点在连线左侧"""
+    """向左绕行：中垂线向左偏移"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -152,38 +186,14 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     if not blocking_obs:
         return [start, end]
     
-    path = [start]
+    waypoint = find_clear_perpendicular_point(start, end, obstacles_gcj, "left", safety_radius)
+    if waypoint is None:
+        return [start, end]
     
-    # 计算基础偏移距离（安全半径的3倍，确保绕过障碍物）
-    base_offset = safety_radius * 10  # 约50米
-    
-    # 尝试不同的偏移距离，找到能绕过所有障碍物的点
-    for offset_mult in [3, 5, 8, 10, 15, 20]:
-        offset_dist = safety_radius * offset_mult
-        waypoint = get_perpendicular_point(start, end, offset_dist, "left")
-        
-        # 检查这个绕行点是否能让两段路径都不穿过任何障碍物
-        valid = True
-        for obs in blocking_obs:
-            coords = obs.get('polygon', [])
-            if coords:
-                if line_intersects_polygon(start, waypoint, coords) or line_intersects_polygon(waypoint, end, coords):
-                    valid = False
-                    break
-        
-        if valid:
-            path.append(waypoint)
-            break
-    else:
-        # 如果都失败，使用最大偏移
-        waypoint = get_perpendicular_point(start, end, safety_radius * 20, "left")
-        path.append(waypoint)
-    
-    path.append(end)
-    return path
+    return [start, waypoint, end]
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：使用中垂线，绕行点在连线右侧"""
+    """向右绕行：中垂线向右偏移"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -194,31 +204,11 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
     if not blocking_obs:
         return [start, end]
     
-    path = [start]
+    waypoint = find_clear_perpendicular_point(start, end, obstacles_gcj, "right", safety_radius)
+    if waypoint is None:
+        return [start, end]
     
-    base_offset = safety_radius * 10
-    
-    for offset_mult in [3, 5, 8, 10, 15, 20]:
-        offset_dist = safety_radius * offset_mult
-        waypoint = get_perpendicular_point(start, end, offset_dist, "right")
-        
-        valid = True
-        for obs in blocking_obs:
-            coords = obs.get('polygon', [])
-            if coords:
-                if line_intersects_polygon(start, waypoint, coords) or line_intersects_polygon(waypoint, end, coords):
-                    valid = False
-                    break
-        
-        if valid:
-            path.append(waypoint)
-            break
-    else:
-        waypoint = get_perpendicular_point(start, end, safety_radius * 20, "right")
-        path.append(waypoint)
-    
-    path.append(end)
-    return path
+    return [start, waypoint, end]
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     left_path = find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
