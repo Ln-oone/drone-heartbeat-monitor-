@@ -210,7 +210,7 @@ def get_obstacle_buffer(polygon, buffer_meters=10):
     
     return buffered_polygon
 
-# ==================== 改进的绕行算法 - 沿着障碍物向终点靠近 ====================
+# ==================== 清晰准确的左右绕行算法 ====================
 def get_all_blocking_obstacles(start, end, obstacles_gcj, flight_altitude):
     """获取所有阻挡航线的障碍物"""
     blocking_obs = []
@@ -249,8 +249,8 @@ def get_merged_obstacle_boundary(blocking_obs):
 
 def find_left_side_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """
-    向左绕行：沿着障碍物左侧向终点靠近
-    路径会根据起点和终点的相对位置，智能选择沿着障碍物边界向终点移动
+    向左绕行：始终保持在障碍物左侧
+    核心：路径的经度始终小于障碍物的最小经度
     """
     blocking_obs = get_all_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -261,77 +261,29 @@ def find_left_side_path(start, end, obstacles_gcj, flight_altitude, safety_radiu
     if not boundary:
         return smooth_path([start, end])
     
-    # 计算安全偏移
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 2, start[1])
+    # 计算左侧安全线（障碍物最左侧 - 安全距离）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
     left_line_x = boundary['min_lng'] - offset_lng
     
+    # 构建左侧绕行路径 - 始终保持在左侧
     waypoints = [start]
     
-    # 判断起点和终点的相对位置
-    start_to_end_lat = end[1] - start[1]
-    start_to_end_lng = end[0] - start[0]
+    # 添加左侧过渡点
+    waypoints.append([left_line_x, start[1]])
     
-    # 决定绕行路径
-    if abs(start_to_end_lat) > abs(start_to_end_lng):
-        # 主要纵向移动
-        if start[1] < end[1]:
-            # 向上移动
-            # 路径：起点 → 向左 → 沿左侧线向上 → 向右到终点
-            waypoints.append([left_line_x, start[1]])
-            
-            # 沿着左侧线添加中间点，逐渐向终点纬度靠近
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                # 逐渐向右靠近终点的经度
-                lng = left_line_x + (end[0] - left_line_x) * t * 0.5
-                waypoints.append([lng, lat])
-            
-            waypoints.append([left_line_x, end[1]])
-            waypoints.append(end)
-        else:
-            # 向下移动
-            waypoints.append([left_line_x, start[1]])
-            
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = left_line_x + (end[0] - left_line_x) * t * 0.5
-                waypoints.append([lng, lat])
-            
-            waypoints.append([left_line_x, end[1]])
-            waypoints.append(end)
-    else:
-        # 主要横向移动
-        if start[0] < end[0]:
-            # 向右移动
-            # 路径：起点 → 向左 → 沿左侧线向下/上 → 向右到终点
-            waypoints.append([left_line_x, start[1]])
-            
-            # 沿着左侧线移动，同时逐渐向终点靠近
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                # 逐渐向终点的纬度和经度靠近
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = left_line_x + (end[0] - left_line_x) * t
-                waypoints.append([lng, lat])
-            
-            waypoints.append(end)
-        else:
-            # 向左移动（这种情况较少见）
-            waypoints.append([left_line_x, start[1]])
-            
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = left_line_x + (end[0] - left_line_x) * t
-                waypoints.append([lng, lat])
-            
-            waypoints.append(end)
+    # 在左侧线上添加多个点，逐渐向终点纬度靠近
+    num_points = 15
+    for i in range(1, num_points + 1):
+        t = i / (num_points + 1)
+        # 纬度线性插值
+        lat = start[1] + (end[1] - start[1]) * t
+        # 经度保持在左侧线，但可以稍微向终点经度偏移（可选）
+        lng = left_line_x
+        waypoints.append([lng, lat])
+    
+    # 添加终点过渡点
+    waypoints.append([left_line_x, end[1]])
+    waypoints.append(end)
     
     # 验证路径
     path_valid = True
@@ -348,13 +300,26 @@ def find_left_side_path(start, end, obstacles_gcj, flight_altitude, safety_radiu
         smoothed = smooth_path(simplified, smooth_factor=0.15)
         return smoothed
     
-    # 如果复杂路径失败，使用简单路径
-    return find_left_simple_path(start, end, left_line_x, blocking_obs)
+    # 如果路径被阻挡，尝试增加偏移距离
+    left_line_x = boundary['min_lng'] - offset_lng * 1.5
+    waypoints = [start, [left_line_x, start[1]]]
+    
+    for i in range(1, num_points + 1):
+        t = i / (num_points + 1)
+        lat = start[1] + (end[1] - start[1]) * t
+        waypoints.append([left_line_x, lat])
+    
+    waypoints.append([left_line_x, end[1]])
+    waypoints.append(end)
+    
+    simplified = simplify_path(waypoints)
+    smoothed = smooth_path(simplified, smooth_factor=0.15)
+    return smoothed
 
 def find_right_side_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """
-    向右绕行：沿着障碍物右侧向终点靠近
-    路径会根据起点和终点的相对位置，智能选择沿着障碍物边界向终点移动
+    向右绕行：始终保持在障碍物右侧
+    核心：路径的经度始终大于障碍物的最大经度
     """
     blocking_obs = get_all_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -365,71 +330,29 @@ def find_right_side_path(start, end, obstacles_gcj, flight_altitude, safety_radi
     if not boundary:
         return smooth_path([start, end])
     
-    # 计算安全偏移
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 2, start[1])
+    # 计算右侧安全线（障碍物最右侧 + 安全距离）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
     right_line_x = boundary['max_lng'] + offset_lng
     
+    # 构建右侧绕行路径 - 始终保持在右侧
     waypoints = [start]
     
-    # 判断起点和终点的相对位置
-    start_to_end_lat = end[1] - start[1]
-    start_to_end_lng = end[0] - start[0]
+    # 添加右侧过渡点
+    waypoints.append([right_line_x, start[1]])
     
-    # 决定绕行路径
-    if abs(start_to_end_lat) > abs(start_to_end_lng):
-        # 主要纵向移动
-        if start[1] < end[1]:
-            # 向上移动
-            waypoints.append([right_line_x, start[1]])
-            
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = right_line_x + (end[0] - right_line_x) * t * 0.5
-                waypoints.append([lng, lat])
-            
-            waypoints.append([right_line_x, end[1]])
-            waypoints.append(end)
-        else:
-            # 向下移动
-            waypoints.append([right_line_x, start[1]])
-            
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = right_line_x + (end[0] - right_line_x) * t * 0.5
-                waypoints.append([lng, lat])
-            
-            waypoints.append([right_line_x, end[1]])
-            waypoints.append(end)
-    else:
-        # 主要横向移动
-        if start[0] < end[0]:
-            # 向右移动
-            waypoints.append([right_line_x, start[1]])
-            
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = right_line_x + (end[0] - right_line_x) * t
-                waypoints.append([lng, lat])
-            
-            waypoints.append(end)
-        else:
-            # 向左移动
-            waypoints.append([right_line_x, start[1]])
-            
-            num_points = 10
-            for i in range(1, num_points):
-                t = i / num_points
-                lat = start[1] + (end[1] - start[1]) * t
-                lng = right_line_x + (end[0] - right_line_x) * t
-                waypoints.append([lng, lat])
-            
-            waypoints.append(end)
+    # 在右侧线上添加多个点，逐渐向终点纬度靠近
+    num_points = 15
+    for i in range(1, num_points + 1):
+        t = i / (num_points + 1)
+        # 纬度线性插值
+        lat = start[1] + (end[1] - start[1]) * t
+        # 经度保持在右侧线
+        lng = right_line_x
+        waypoints.append([lng, lat])
+    
+    # 添加终点过渡点
+    waypoints.append([right_line_x, end[1]])
+    waypoints.append(end)
     
     # 验证路径
     path_valid = True
@@ -446,55 +369,21 @@ def find_right_side_path(start, end, obstacles_gcj, flight_altitude, safety_radi
         smoothed = smooth_path(simplified, smooth_factor=0.15)
         return smoothed
     
-    # 如果复杂路径失败，使用简单路径
-    return find_right_simple_path(start, end, right_line_x, blocking_obs)
-
-def find_left_simple_path(start, end, left_line_x, blocking_obs):
-    """简单的左侧绕行路径"""
-    path = [
-        start,
-        [left_line_x, start[1]],
-        [left_line_x, end[1]],
-        end
-    ]
+    # 如果路径被阻挡，尝试增加偏移距离
+    right_line_x = boundary['max_lng'] + offset_lng * 1.5
+    waypoints = [start, [right_line_x, start[1]]]
     
-    path_valid = True
-    for i in range(len(path) - 1):
-        for obs in blocking_obs:
-            if line_intersects_polygon(path[i], path[i+1], obs['polygon']):
-                path_valid = False
-                break
-        if not path_valid:
-            break
+    for i in range(1, num_points + 1):
+        t = i / (num_points + 1)
+        lat = start[1] + (end[1] - start[1]) * t
+        waypoints.append([right_line_x, lat])
     
-    if path_valid:
-        return smooth_path(path, 0.15)
+    waypoints.append([right_line_x, end[1]])
+    waypoints.append(end)
     
-    # 如果还是失败，返回直线
-    return [start, end]
-
-def find_right_simple_path(start, end, right_line_x, blocking_obs):
-    """简单的右侧绕行路径"""
-    path = [
-        start,
-        [right_line_x, start[1]],
-        [right_line_x, end[1]],
-        end
-    ]
-    
-    path_valid = True
-    for i in range(len(path) - 1):
-        for obs in blocking_obs:
-            if line_intersects_polygon(path[i], path[i+1], obs['polygon']):
-                path_valid = False
-                break
-        if not path_valid:
-            break
-    
-    if path_valid:
-        return smooth_path(path, 0.15)
-    
-    return [start, end]
+    simplified = simplify_path(waypoints)
+    smoothed = smooth_path(simplified, smooth_factor=0.15)
+    return smoothed
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """最佳航线 - 自动选择最短路径"""
@@ -507,7 +396,7 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     if not boundary:
         return smooth_path([start, end])
     
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 2, start[1])
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
     
     # 生成候选路径并计算距离
     candidates = []
@@ -540,7 +429,13 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     candidates.sort(key=lambda x: x[1])
     best_path = candidates[0][2]
     
-    return smooth_path(best_path, 0.15)
+    # 平滑处理
+    waypoints = [best_path[0]]
+    for i in range(1, len(best_path) - 1):
+        waypoints.append(best_path[i])
+    waypoints.append(best_path[-1])
+    
+    return smooth_path(waypoints, 0.15)
 
 def simplify_path(path):
     """简化路径，移除不必要的中间点"""
@@ -589,7 +484,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v18.0'
+        'version': 'v19.0'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -734,10 +629,10 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         
         if "向左" in direction:
             line_color = "purple"
-            line_label = "向左绕行（沿障碍物左侧向终点靠近）"
+            line_label = "向左绕行（始终在障碍物左侧）"
         elif "向右" in direction:
             line_color = "orange"
-            line_label = "向右绕行（沿障碍物右侧向终点靠近）"
+            line_label = "向右绕行（始终在障碍物右侧）"
         else:
             line_color = "green"
             line_label = "最佳航线（自动选择最短路径）"
@@ -746,7 +641,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
                        popup=f"✈️ {line_label}\n总航点数: {len(planned_path)}").add_to(m)
         
         # 标记关键航点
-        step = max(1, len(planned_path) // 15)
+        step = max(1, len(planned_path) // 20)
         for i, point in enumerate(planned_path[::step]):
             if 0 < i < len(planned_path[::step]) - 1:
                 folium.CircleMarker([point[1], point[0]], radius=3, color=line_color, 
@@ -869,7 +764,7 @@ def main():
         f"📌 直线路径: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}\n"
         f"✈️ 飞行高度: {flight_alt} m\n"
         f"🛡️ 安全半径: {safety_radius} 米\n"
-        f"✨ 航线特性: 沿障碍物边界向终点靠近"
+        f"✨ 航线特性: 左右绕行始终保持在障碍物两侧"
     )
     
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
@@ -893,7 +788,7 @@ def main():
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度）")
         
-        st.info("📝 **避障说明**：向左/右绕行会沿着障碍物边界逐渐向终点靠近，航线更自然高效")
+        st.info("📝 **避障说明**：向左绕行→航线始终在障碍物左侧 | 向右绕行→航线始终在障碍物右侧 | 最佳航线→自动选择最短路径")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -996,7 +891,12 @@ def main():
             st.metric("🛡️ 安全半径", f"{safety_radius} 米")
             if st.session_state.planned_path:
                 st.metric("🎯 航点数量", len(st.session_state.planned_path))
-                st.caption("✨ 航线沿障碍物边界向终点靠近")
+                if st.session_state.current_direction == "向左绕行":
+                    st.caption("✨ 航线始终保持在障碍物左侧")
+                elif st.session_state.current_direction == "向右绕行":
+                    st.caption("✨ 航线始终保持在障碍物右侧")
+                else:
+                    st.caption("✨ 自动选择最短安全路径")
             
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -1030,8 +930,8 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("🟣 紫色=向左绕行 | 🟠 橙色=向右绕行 | 🟢 绿色=最佳航线")
-            st.caption("🔴 红色=需避让障碍物 | ✨ 航线沿障碍物边界向终点靠近")
+            st.caption("🟣 紫色=向左绕行（左侧）| 🟠 橙色=向右绕行（右侧）| 🟢 绿色=最佳航线")
+            st.caption("🔴 红色=需避让障碍物 | ✨ 航线始终保持在障碍物指定侧")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] or SCHOOL_CENTER_GCJ
@@ -1228,7 +1128,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v18.0'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v19.0'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
