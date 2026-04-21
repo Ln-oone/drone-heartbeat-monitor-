@@ -166,8 +166,101 @@ def get_obstacle_bounds(obstacles_gcj, flight_altitude):
         'center_lat': (min_lat + max_lat) / 2
     }
 
+def is_point_safe(point, obstacles_gcj, flight_altitude, safety_radius):
+    """检查单个点是否安全（不触碰任何障碍物）"""
+    for obs in obstacles_gcj:
+        if obs.get('height', 30) > flight_altitude:
+            coords = obs.get('polygon', [])
+            if coords and point_in_polygon(point, coords):
+                return False
+            if coords:
+                for i in range(len(coords)):
+                    seg_start = coords[i]
+                    seg_end = coords[(i + 1) % len(coords)]
+                    dist = point_to_segment_distance_meters(point, seg_start, seg_end)
+                    if dist < safety_radius:
+                        return False
+    return True
+
+def is_segment_safe(p1, p2, obstacles_gcj, flight_altitude, safety_radius):
+    """检查线段是否安全（不穿过任何障碍物，且保持安全距离）"""
+    # 检查线段是否与障碍物相交
+    for obs in obstacles_gcj:
+        if obs.get('height', 30) > flight_altitude:
+            coords = obs.get('polygon', [])
+            if coords and line_intersects_polygon(p1, p2, coords):
+                return False
+    
+    # 采样检查安全距离
+    num_samples = 20
+    for i in range(num_samples + 1):
+        t = i / num_samples
+        sample_lng = p1[0] + (p2[0] - p1[0]) * t
+        sample_lat = p1[1] + (p2[1] - p1[1]) * t
+        sample_point = [sample_lng, sample_lat]
+        
+        for obs in obstacles_gcj:
+            if obs.get('height', 30) > flight_altitude:
+                coords = obs.get('polygon', [])
+                if coords:
+                    for j in range(len(coords)):
+                        seg_start = coords[j]
+                        seg_end = coords[(j + 1) % len(coords)]
+                        dist = point_to_segment_distance_meters(sample_point, seg_start, seg_end)
+                        if dist < safety_radius:
+                            return False
+    return True
+
+def create_curved_waypoints(start, end, bounds, side, safety_radius, lat):
+    """
+    创建曲线绕行航点（多段式，有迂回感）
+    """
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 2.5, lat)
+    
+    if side == "left":
+        # 左侧绕行点（经度小于障碍物左边界）
+        base_x = bounds['left'] - offset_lng
+    else:
+        # 右侧绕行点（经度大于障碍物右边界）
+        base_x = bounds['right'] + offset_lng
+    
+    # 计算关键Y坐标
+    start_y = start[1]
+    end_y = end[1]
+    bounds_top = bounds['top']
+    bounds_bottom = bounds['bottom']
+    bounds_center_y = bounds['center_lat']
+    
+    # 创建多个绕行点，形成曲线路径
+    waypoints = []
+    
+    # 第一段：从起点水平移动到绕行线
+    waypoints.append([base_x, start_y])
+    
+    # 第二段：向下/向上迂回（增加迂回感）
+    if start_y < bounds_center_y:
+        # 从下方绕过
+        waypoints.append([base_x - offset_lng * 0.5, bounds_bottom - offset_lat])
+        waypoints.append([base_x, bounds_bottom - offset_lat * 1.5])
+        waypoints.append([base_x + offset_lng * 0.3, bounds_bottom - offset_lat])
+        waypoints.append([base_x, bounds_bottom - offset_lat * 0.8])
+    else:
+        # 从上方绕过
+        waypoints.append([base_x - offset_lng * 0.5, bounds_top + offset_lat])
+        waypoints.append([base_x, bounds_top + offset_lat * 1.5])
+        waypoints.append([base_x + offset_lng * 0.3, bounds_top + offset_lat])
+        waypoints.append([base_x, bounds_top + offset_lat * 0.8])
+    
+    # 第三段：垂直移动到终点纬度
+    waypoints.append([base_x, end_y])
+    
+    # 第四段：水平移动到终点
+    waypoints.append([end[0], end_y])
+    
+    return waypoints
+
 def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction, safety_radius=5):
-    """创建避障路径"""
+    """创建避障路径 - 优化版"""
     
     # 获取障碍物边界
     bounds = get_obstacle_bounds(obstacles_gcj, flight_altitude)
@@ -187,79 +280,81 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction,
     if not blocked:
         return [start, end]
     
-    # 计算安全偏移距离（度）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
-    
+    # 根据方向创建曲线绕行航点
     if direction == "向左绕行":
-        # 从左侧绕过：在障碍物左侧创建一个垂直通道
-        left_x = bounds['left'] - offset_lng
-        
-        # 构建路径：起点 -> 左侧点 -> 终点
-        path = [start]
-        
-        # 添加中间点：确保路径不穿过障碍物
-        # 先水平移动到左侧
-        if abs(start[0] - left_x) > 0.00001:
-            path.append([left_x, start[1]])
-        
-        # 垂直移动到终点的纬度
-        if abs(start[1] - end[1]) > 0.00001:
-            path.append([left_x, end[1]])
-        
-        # 水平移动到终点
-        if abs(left_x - end[0]) > 0.00001:
-            path.append([end[0], end[1]])
-        
-        path.append(end)
-        
-        # 去重（移除重复的相邻点）
-        unique_path = []
-        for p in path:
-            if not unique_path or distance(unique_path[-1], p) > 0.0000001:
-                unique_path.append(p)
-        
-        return unique_path
-        
+        waypoints = create_curved_waypoints(start, end, bounds, "left", safety_radius, start[1])
     elif direction == "向右绕行":
-        # 从右侧绕过：在障碍物右侧创建一个垂直通道
-        right_x = bounds['right'] + offset_lng
+        waypoints = create_curved_waypoints(start, end, bounds, "right", safety_radius, start[1])
+    else:  # 最佳航线 - 选择较短的
+        left_waypoints = create_curved_waypoints(start, end, bounds, "left", safety_radius, start[1])
+        right_waypoints = create_curved_waypoints(start, end, bounds, "right", safety_radius, start[1])
         
-        path = [start]
+        # 计算路径长度
+        left_len = distance(start, left_waypoints[0])
+        for i in range(len(left_waypoints) - 1):
+            left_len += distance(left_waypoints[i], left_waypoints[i + 1])
+        left_len += distance(left_waypoints[-1], end)
         
-        if abs(start[0] - right_x) > 0.00001:
-            path.append([right_x, start[1]])
+        right_len = distance(start, right_waypoints[0])
+        for i in range(len(right_waypoints) - 1):
+            right_len += distance(right_waypoints[i], right_waypoints[i + 1])
+        right_len += distance(right_waypoints[-1], end)
         
-        if abs(start[1] - end[1]) > 0.00001:
-            path.append([right_x, end[1]])
-        
-        if abs(right_x - end[0]) > 0.00001:
-            path.append([end[0], end[1]])
-        
-        path.append(end)
-        
-        unique_path = []
-        for p in path:
-            if not unique_path or distance(unique_path[-1], p) > 0.0000001:
-                unique_path.append(p)
-        
-        return unique_path
-        
-    else:  # 最佳航线 - 选择较短的路径
-        # 计算左侧路径长度
-        left_x = bounds['left'] - offset_lng
-        left_path_len = abs(start[0] - left_x) + abs(start[1] - end[1]) + abs(left_x - end[0])
-        
-        # 计算右侧路径长度
-        right_x = bounds['right'] + offset_lng
-        right_path_len = abs(start[0] - right_x) + abs(start[1] - end[1]) + abs(right_x - end[0])
-        
-        # 选择较短的路径
-        if left_path_len <= right_path_len:
-            direction = "向左绕行"
+        waypoints = left_waypoints if left_len < right_len else right_waypoints
+        direction = "向左绕行" if left_len < right_len else "向右绕行"
+    
+    # 构建完整路径
+    path = [start] + waypoints + [end]
+    
+    # 验证并调整路径（确保所有线段安全）
+    adjusted_path = [path[0]]
+    for i in range(1, len(path)):
+        # 检查从上一个点到当前点的线段是否安全
+        if not is_segment_safe(adjusted_path[-1], path[i], obstacles_gcj, flight_altitude, safety_radius):
+            # 如果不安全，在中间插入一个安全点
+            mid_lng = (adjusted_path[-1][0] + path[i][0]) / 2
+            mid_lat = (adjusted_path[-1][1] + path[i][1]) / 2
+            mid_point = [mid_lng, mid_lat]
+            
+            # 寻找安全位置
+            found_safe = False
+            for offset in [0.00001, -0.00001, 0.00002, -0.00002]:
+                test_point = [mid_lng + offset, mid_lat]
+                if is_point_safe(test_point, obstacles_gcj, flight_altitude, safety_radius):
+                    adjusted_path.append(test_point)
+                    adjusted_path.append(path[i])
+                    found_safe = True
+                    break
+                test_point = [mid_lng, mid_lat + offset]
+                if is_point_safe(test_point, obstacles_gcj, flight_altitude, safety_radius):
+                    adjusted_path.append(test_point)
+                    adjusted_path.append(path[i])
+                    found_safe = True
+                    break
+            
+            if not found_safe:
+                adjusted_path.append(path[i])
         else:
-            direction = "向右绕行"
-        
-        return create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction, safety_radius)
+            adjusted_path.append(path[i])
+    
+    # 平滑路径（移除不必要的中间点）
+    smoothed = [adjusted_path[0]]
+    i = 0
+    while i < len(adjusted_path) - 1:
+        # 尝试跳过中间的点
+        jumped = False
+        for j in range(len(adjusted_path) - 1, i, -1):
+            if is_segment_safe(adjusted_path[i], adjusted_path[j], obstacles_gcj, flight_altitude, safety_radius):
+                smoothed.append(adjusted_path[j])
+                i = j
+                jumped = True
+                break
+        if not jumped:
+            i += 1
+            if i < len(adjusted_path):
+                smoothed.append(adjusted_path[i])
+    
+    return smoothed
 
 # ==================== 障碍物管理 ====================
 def load_obstacles():
@@ -277,7 +372,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v12.7'
+        'version': 'v14.0'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -884,7 +979,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v12.7'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v14.0'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
