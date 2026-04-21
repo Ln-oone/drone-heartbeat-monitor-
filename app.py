@@ -152,7 +152,7 @@ def meters_to_deg(meters, lat=32.23):
 
 # ==================== 改进的避障算法 ====================
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：从左侧绕过障碍物"""
+    """向左绕行：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -187,18 +187,30 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     # 左侧绕行点
     left_x = min_lng - offset_lng
     
-    # 构建路径：起点 -> 左侧点(起点纬度) -> 左侧点(终点纬度) -> 终点
+    # 计算中间纬度（在障碍物上方或下方绕行）
+    mid_lat = (min_lat + max_lat) / 2
+    
+    # 判断从上方还是下方绕过
+    if start[1] < end[1]:
+        # 从下方绕过
+        bypass_y = min_lat - offset_lat
+    else:
+        # 从上方绕过
+        bypass_y = max_lat + offset_lat
+    
+    # 构建路径：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点
     path = [
-        start,
-        [left_x, start[1]],  # 水平向左
-        [left_x, end[1]],    # 垂直移动
-        end                   # 水平向右到终点
+        start,                           # 起点
+        [left_x, start[1]],              # 绕行点1：水平向左
+        [left_x, bypass_y],              # 绕行点2：垂直移动到绕行纬度
+        [left_x, end[1]],                # 绕行点3：垂直移动到终点纬度
+        end                              # 终点
     ]
     
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：从右侧绕过障碍物"""
+    """向右绕行：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点"""
     blocking_obs = []
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
@@ -233,12 +245,21 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
     # 右侧绕行点
     right_x = max_lng + offset_lng
     
-    # 构建路径：起点 -> 右侧点(起点纬度) -> 右侧点(终点纬度) -> 终点
+    # 判断从上方还是下方绕过
+    if start[1] < end[1]:
+        # 从下方绕过
+        bypass_y = min_lat - offset_lat
+    else:
+        # 从上方绕过
+        bypass_y = max_lat + offset_lat
+    
+    # 构建路径：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点
     path = [
-        start,
-        [right_x, start[1]],  # 水平向右
-        [right_x, end[1]],    # 垂直移动
-        end                    # 水平向左到终点
+        start,                           # 起点
+        [right_x, start[1]],             # 绕行点1：水平向右
+        [right_x, bypass_y],             # 绕行点2：垂直移动到绕行纬度
+        [right_x, end[1]],               # 绕行点3：垂直移动到终点纬度
+        end                              # 终点
     ]
     
     return path
@@ -282,7 +303,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v12.3'
+        'version': 'v12.4'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -420,7 +441,7 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         folium.PolyLine(path_locations, color=line_color, weight=5, opacity=0.9, popup=f"✈️ {direction}").add_to(m)
         
         for i, point in enumerate(planned_path[1:-1]):
-            folium.CircleMarker([point[1], point[0]], radius=6, color=line_color, fill=True, fill_color="white", fill_opacity=0.8, popup=f"航点 {i+1}").add_to(m)
+            folium.CircleMarker([point[1], point[0]], radius=6, color=line_color, fill=True, fill_color="white", fill_opacity=0.8, popup=f"绕行点 {i+1}").add_to(m)
     
     if points_gcj.get('A') and points_gcj.get('B'):
         if not straight_blocked:
@@ -890,7 +911,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v12.3'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v12.4'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
