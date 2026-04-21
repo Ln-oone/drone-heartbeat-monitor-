@@ -9,9 +9,6 @@ import json
 import os
 from datetime import datetime
 import pandas as pd
-import numpy as np
-from scipy.spatial import ConvexHull
-from scipy.interpolate import splprep, splev
 
 # ==================== 页面配置 ====================
 st.set_page_config(page_title="南京科技职业学院 - 无人机地面站系统", layout="wide")
@@ -23,10 +20,6 @@ DEFAULT_B_GCJ = [118.751589, 32.235204]
 
 CONFIG_FILE = "obstacle_config.json"
 DEFAULT_SAFETY_RADIUS_METERS = 5
-
-# 绕行点数量范围（5-15个，用于生成平滑曲线）
-MIN_WAYPOINTS = 5
-MAX_WAYPOINTS = 15
 
 # 高德地图瓦片地址
 GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
@@ -123,107 +116,148 @@ def point_to_polygon_distance(point, polygon):
             min_dist = dist
     return min_dist
 
-def get_polygon_boundary_points(polygon, safety_radius_meters, lat=32.23):
-    """获取多边形向外扩展安全距离后的边界点"""
-    offset_lng, offset_lat = meters_to_deg(safety_radius_meters, lat)
-    
-    # 计算多边形中心
+def get_polygon_bounds(polygon):
+    if not polygon:
+        return None
+    min_lng = min(p[0] for p in polygon)
+    max_lng = max(p[0] for p in polygon)
+    min_lat = min(p[1] for p in polygon)
+    max_lat = max(p[1] for p in polygon)
+    return {
+        'min_lng': min_lng, 'max_lng': max_lng,
+        'min_lat': min_lat, 'max_lat': max_lat,
+        'center_lng': (min_lng + max_lng) / 2,
+        'center_lat': (min_lat + max_lat) / 2
+    }
+
+def get_polygon_center(polygon):
+    """计算多边形中心点"""
+    if not polygon:
+        return [0, 0]
     center_lng = sum(p[0] for p in polygon) / len(polygon)
     center_lat = sum(p[1] for p in polygon) / len(polygon)
-    
-    # 向外扩展每个顶点
-    expanded_points = []
-    for p in polygon:
-        # 计算从中心到顶点的方向向量
-        dx = p[0] - center_lng
-        dy = p[1] - center_lat
-        length = math.sqrt(dx*dx + dy*dy)
-        if length > 0:
-            # 沿径向向外扩展
-            new_x = p[0] + (dx / length) * offset_lng * 1.2
-            new_y = p[1] + (dy / length) * offset_lat * 1.2
-            expanded_points.append([new_x, new_y])
-    
-    return expanded_points
+    return [center_lng, center_lat]
 
-def generate_smooth_curve(points, num_interpolated=20):
-    """生成平滑曲线"""
+def generate_smooth_curve(points, num_interpolated=30):
+    """
+    使用 Catmull-Rom 样条曲线生成平滑路径
+    不需要 scipy，纯数学实现
+    """
     if len(points) < 3:
         return points
     
-    points_array = np.array(points)
-    
-    try:
-        # 使用样条插值生成平滑曲线
-        tck, u = splprep([points_array[:, 0], points_array[:, 1]], s=0.1, per=False)
-        u_new = np.linspace(u.min(), u.max(), num_interpolated)
-        x_new, y_new = splev(u_new, tck)
+    def catmull_rom_spline(p0, p1, p2, p3, t):
+        """Catmull-Rom 样条插值"""
+        t2 = t * t
+        t3 = t2 * t
         
-        smooth_points = [[x_new[i], y_new[i]] for i in range(len(x_new))]
-        return smooth_points
-    except:
-        # 如果样条插值失败，返回原始点
-        return points
+        x = 0.5 * ((2 * p1[0]) +
+                   (-p0[0] + p2[0]) * t +
+                   (2*p0[0] - 5*p1[0] + 4*p2[0] - p3[0]) * t2 +
+                   (-p0[0] + 3*p1[0] - 3*p2[0] + p3[0]) * t3)
+        
+        y = 0.5 * ((2 * p1[1]) +
+                   (-p0[1] + p2[1]) * t +
+                   (2*p0[1] - 5*p1[1] + 4*p2[1] - p3[1]) * t2 +
+                   (-p0[1] + 3*p1[1] - 3*p2[1] + p3[1]) * t3)
+        
+        return [x, y]
+    
+    smooth_points = []
+    
+    # 对于每个线段，生成插值点
+    for i in range(len(points) - 1):
+        p0 = points[max(0, i-1)]
+        p1 = points[i]
+        p2 = points[i+1]
+        p3 = points[min(len(points)-1, i+2)]
+        
+        # 在线段 p1-p2 上生成插值点
+        for j in range(num_interpolated):
+            t = j / num_interpolated
+            interpolated = catmull_rom_spline(p0, p1, p2, p3, t)
+            smooth_points.append(interpolated)
+    
+    # 添加最后一个点
+    smooth_points.append(points[-1])
+    
+    # 去重
+    unique_points = []
+    for p in smooth_points:
+        if not unique_points or distance(p, unique_points[-1]) > 1e-10:
+            unique_points.append(p)
+    
+    return unique_points
 
-def is_point_safe(point, obstacles_gcj, flight_altitude, safety_radius_meters):
-    """检查点是否安全（不靠近任何障碍物）"""
-    for obs in obstacles_gcj:
-        obs_height = obs.get('height', 30)
-        if obs_height > flight_altitude:
-            polygon = obs.get('polygon', [])
-            if polygon:
-                dist = point_to_polygon_distance(point, polygon) * 111000
-                if dist < safety_radius_meters:
-                    return False
-    return True
+def expand_polygon(polygon, expand_meters, lat=32.23):
+    """向外扩展多边形（膨胀）"""
+    offset_lng, offset_lat = meters_to_deg(expand_meters, lat)
+    center = get_polygon_center(polygon)
+    
+    expanded = []
+    for p in polygon:
+        dx = p[0] - center[0]
+        dy = p[1] - center[1]
+        length = math.sqrt(dx*dx + dy*dy)
+        if length > 0:
+            new_x = p[0] + (dx / length) * offset_lng
+            new_y = p[1] + (dy / length) * offset_lat
+            expanded.append([new_x, new_y])
+    
+    return expanded
 
-def find_waypoints_around_obstacle(start, end, obstacle_polygon, safety_radius_meters, side, lat=32.23):
-    """围绕单个障碍物生成弯曲的航点"""
-    offset_lng, offset_lat = meters_to_deg(safety_radius_meters, lat)
+def find_arc_path_around_obstacle(start, end, obstacle_polygon, safety_radius_meters, side, lat=32.23):
+    """
+    围绕障碍物生成弧形路径（沿障碍物边界弯曲）
+    """
+    offset_lng, offset_lat = meters_to_deg(safety_radius_meters * 1.5, lat)
+    center = get_polygon_center(obstacle_polygon)
     
-    # 获取障碍物的边界点
-    boundary_points = get_polygon_boundary_points(obstacle_polygon, safety_radius_meters, lat)
+    # 计算障碍物的包围半径（近似）
+    max_radius = 0
+    for p in obstacle_polygon:
+        rad = distance(center, p)
+        if rad > max_radius:
+            max_radius = rad
     
-    if not boundary_points:
-        return []
-    
-    # 计算障碍物中心
-    center = [sum(p[0] for p in obstacle_polygon) / len(obstacle_polygon),
-              sum(p[1] for p in obstacle_polygon) / len(obstacle_polygon)]
+    # 弧形半径（障碍物半径 + 安全距离）
+    arc_radius_deg = max_radius + offset_lng * 1.2
     
     # 计算起点和终点相对于中心的角度
     angle_start = math.atan2(start[1] - center[1], start[0] - center[0])
     angle_end = math.atan2(end[1] - center[1], end[0] - center[0])
     
-    # 根据绕行方向选择路径
+    # 根据绕行方向选择角度路径
     if side == "left":
-        # 逆时针方向（向左绕）
+        # 向左绕行：逆时针方向
         if angle_end <= angle_start:
             angle_end += 2 * math.pi
     else:
-        # 顺时针方向（向右绕）
+        # 向右绕行：顺时针方向
         if angle_end >= angle_start:
             angle_end -= 2 * math.pi
     
-    # 生成绕行点（沿扩展边界）
-    num_waypoints = 8  # 固定8个点形成弯曲路径
-    waypoints = []
+    # 生成弧形上的点（20-30个点形成平滑曲线）
+    num_points = 25
+    arc_points = []
     
-    for i in range(num_waypoints):
-        t = i / (num_waypoints - 1)
+    for i in range(num_points + 1):
+        t = i / num_points
         angle = angle_start + t * (angle_end - angle_start)
         
-        # 径向距离（安全距离 + 一些变化以形成曲线）
-        radius = distance(center, boundary_points[0]) * 111000 + safety_radius_meters * 0.5
-        radius_deg = radius / 111000
+        # 添加一些曲率变化，使路径更自然
+        if side == "left":
+            radius_factor = 1.0 + 0.1 * math.sin(t * math.pi)
+        else:
+            radius_factor = 1.0 + 0.1 * math.sin(t * math.pi)
         
-        # 计算绕行点位置
-        wp_x = center[0] + radius_deg * math.cos(angle)
-        wp_y = center[1] + radius_deg * math.sin(angle)
+        radius = arc_radius_deg * radius_factor
         
-        waypoints.append([wp_x, wp_y])
+        x = center[0] + radius * math.cos(angle)
+        y = center[1] + radius * math.sin(angle)
+        arc_points.append([x, y])
     
-    return waypoints
+    return arc_points
 
 def find_curved_path_around_obstacles(start, end, obstacles_gcj, flight_altitude, safety_radius_meters, side="best"):
     """围绕所有阻挡障碍物生成弯曲路径"""
@@ -241,8 +275,7 @@ def find_curved_path_around_obstacles(start, end, obstacles_gcj, flight_altitude
     
     # 按距离起点排序
     def dist_to_start(obs):
-        center = [sum(p[0] for p in obs['polygon']) / len(obs['polygon']),
-                  sum(p[1] for p in obs['polygon']) / len(obs['polygon'])]
+        center = get_polygon_center(obs['polygon'])
         return distance(start, center)
     
     blocking_obs.sort(key=dist_to_start)
@@ -258,39 +291,32 @@ def find_curved_path_around_obstacles(start, end, obstacles_gcj, flight_altitude
         
         return left_path if left_len < right_len else right_path
     
-    # 构建路径
+    # 构建路径：依次绕过每个障碍物
     current_start = start
     full_path = [start]
     
     for obs in blocking_obs:
         polygon = obs['polygon']
-        # 生成围绕当前障碍物的弯曲航点
-        obs_waypoints = find_waypoints_around_obstacle(
+        # 生成绕过当前障碍物的弧形路径
+        obs_path = find_arc_path_around_obstacle(
             current_start, end, polygon, safety_radius_meters, side
         )
         
-        if obs_waypoints:
-            # 添加绕行点到路径
-            full_path.extend(obs_waypoints)
-            current_start = obs_waypoints[-1]
-        else:
-            current_start = end
-            break
+        if obs_path and len(obs_path) > 1:
+            # 添加路径（跳过第一个点避免重复）
+            full_path.extend(obs_path[1:] if len(obs_path) > 1 else obs_path)
+            current_start = obs_path[-1]
     
-    full_path.append(end)
+    # 确保终点是目标点
+    if distance(full_path[-1], end) > 1e-8:
+        full_path.append(end)
     
-    # 去重（移除重复的相邻点）
-    unique_path = []
-    for p in full_path:
-        if not unique_path or distance(p, unique_path[-1]) > 1e-10:
-            unique_path.append(p)
-    
-    # 平滑路径
-    if len(unique_path) >= 3:
-        smooth_path = generate_smooth_curve(unique_path, num_interpolated=30)
+    # 平滑整条路径
+    if len(full_path) >= 3:
+        smooth_path = generate_smooth_curve(full_path, num_interpolated=20)
         return smooth_path
     
-    return unique_path
+    return full_path
 
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """向左绕行"""
@@ -313,14 +339,26 @@ def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction,
     else:
         return find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
 
+def is_point_safe(point, obstacles_gcj, flight_altitude, safety_radius_meters):
+    """检查点是否安全（不靠近任何障碍物）"""
+    for obs in obstacles_gcj:
+        obs_height = obs.get('height', 30)
+        if obs_height > flight_altitude:
+            polygon = obs.get('polygon', [])
+            if polygon:
+                dist = point_to_polygon_distance(point, polygon) * 111000
+                if dist < safety_radius_meters * 0.8:  # 保持安全余量
+                    return False
+    return True
+
 def check_path_safety(path, obstacles_gcj, flight_altitude, safety_radius_meters):
     """检查整条路径是否安全（不接触障碍物）"""
     if not path:
         return False
     
-    # 检查路径上的每个点
-    for point in path:
-        if not is_point_safe(point, obstacles_gcj, flight_altitude, safety_radius_meters):
+    # 采样检查路径上的点（每隔一定距离检查）
+    for i in range(len(path)):
+        if not is_point_safe(path[i], obstacles_gcj, flight_altitude, safety_radius_meters):
             return False
     
     # 检查路径线段
@@ -334,13 +372,18 @@ def check_path_safety(path, obstacles_gcj, flight_altitude, safety_radius_meters
                     # 检查线段是否与障碍物相交
                     if line_intersects_polygon(p1, p2, polygon):
                         return False
+                    
                     # 检查线段到障碍物的距离
                     for j in range(len(polygon)):
                         seg_start = polygon[j]
                         seg_end = polygon[(j+1) % len(polygon)]
-                        dist = point_to_segment_distance_deg(p1, seg_start, seg_end) * 111000
-                        if dist < safety_radius_meters * 0.8:  # 保持安全余量
-                            return False
+                        # 检查线段上的多个点
+                        for t in [0, 0.25, 0.5, 0.75, 1]:
+                            px = p1[0] + t * (p2[0] - p1[0])
+                            py = p1[1] + t * (p2[1] - p1[1])
+                            dist = point_to_segment_distance_deg([px, py], seg_start, seg_end) * 111000
+                            if dist < safety_radius_meters * 0.6:
+                                return False
     
     return True
 
@@ -360,7 +403,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v13.0'
+        'version': 'v13.1'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -473,9 +516,6 @@ class HeartbeatSimulator:
         
         return heartbeat
 
-def point_to_segment_distance_meters(point, seg_start, seg_end):
-    return point_to_segment_distance_deg(point, seg_start, seg_end) * 111000
-
 def check_safety_radius(drone_pos, obstacles_gcj, flight_altitude, safety_radius):
     if not drone_pos:
         return True, None, None
@@ -541,11 +581,6 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         else:
             line_color = "green"
         folium.PolyLine(path_locations, color=line_color, weight=5, opacity=0.9, popup=f"✈️ {direction}（弯曲避障路径）").add_to(m)
-        
-        # 显示绕行点
-        for i, point in enumerate(planned_path):
-            if i > 0 and i < len(planned_path) - 1:
-                folium.CircleMarker([point[1], point[0]], radius=3, color=line_color, fill=True, fill_color="white", fill_opacity=0.8, popup=f"航点 {i}").add_to(m)
     
     if points_gcj.get('A') and points_gcj.get('B'):
         if not straight_blocked:
@@ -1039,7 +1074,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v13.0'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v13.1'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
