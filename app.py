@@ -150,116 +150,142 @@ def meters_to_deg(meters, lat=32.23):
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
-# ==================== 改进的避障算法 ====================
+# ==================== 可靠的避障算法 ====================
+def get_combined_obstacle_bounds(obstacles_gcj, flight_altitude):
+    """获取所有阻挡障碍物的合并边界"""
+    min_lng = float('inf')
+    max_lng = -float('inf')
+    min_lat = float('inf')
+    max_lat = -float('inf')
+    
+    for obs in obstacles_gcj:
+        if obs.get('height', 30) > flight_altitude:
+            coords = obs.get('polygon', [])
+            if coords:
+                for p in coords:
+                    min_lng = min(min_lng, p[0])
+                    max_lng = max(max_lng, p[0])
+                    min_lat = min(min_lat, p[1])
+                    max_lat = max(max_lat, p[1])
+    
+    if min_lng == float('inf'):
+        return None
+    
+    return {
+        'left': min_lng,
+        'right': max_lng,
+        'bottom': min_lat,
+        'top': max_lat,
+        'center_lng': (min_lng + max_lng) / 2,
+        'center_lat': (min_lat + max_lat) / 2
+    }
+
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向左绕行：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点"""
-    blocking_obs = []
+    """向左绕行：从左侧完全绕过障碍物"""
+    # 获取障碍物边界
+    bounds = get_combined_obstacle_bounds(obstacles_gcj, flight_altitude)
+    if bounds is None:
+        return [start, end]
+    
+    # 检查是否需要绕行
+    blocked = False
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
             coords = obs.get('polygon', [])
             if coords and line_intersects_polygon(start, end, coords):
-                blocking_obs.append(obs)
+                blocked = True
+                break
     
-    if not blocking_obs:
+    if not blocked:
         return [start, end]
     
-    # 获取所有阻挡障碍物的边界
-    all_bounds = []
-    for obs in blocking_obs:
-        coords = obs.get('polygon', [])
-        if coords:
-            bounds = get_polygon_bounds(coords)
-            if bounds:
-                all_bounds.append(bounds)
+    # 计算安全偏移（米转度）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 5, start[1])
     
-    if not all_bounds:
-        return [start, end]
+    # 左侧绕行点X坐标（障碍物左边 + 安全距离）
+    left_x = bounds['left'] - offset_lng
     
-    # 合并边界
-    min_lng = min(b['min_lng'] for b in all_bounds)
-    max_lng = max(b['max_lng'] for b in all_bounds)
-    min_lat = min(b['min_lat'] for b in all_bounds)
-    max_lat = max(b['max_lat'] for b in all_bounds)
+    # 确定从上方还是下方绕过
+    # 计算障碍物中心Y和起点终点Y的关系
+    center_y = bounds['center_lat']
+    start_y = start[1]
+    end_y = end[1]
     
-    # 计算安全偏移（约100米）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
-    
-    # 左侧绕行点
-    left_x = min_lng - offset_lng
-    
-    # 计算中间纬度（在障碍物上方或下方绕行）
-    mid_lat = (min_lat + max_lat) / 2
-    
-    # 判断从上方还是下方绕过
-    if start[1] < end[1]:
-        # 从下方绕过
-        bypass_y = min_lat - offset_lat
+    if start_y < center_y and end_y < center_y:
+        # 都在上方，从上方绕过
+        bypass_y = bounds['top'] + offset_lat
+    elif start_y > center_y and end_y > center_y:
+        # 都在下方，从下方绕过
+        bypass_y = bounds['bottom'] - offset_lat
     else:
-        # 从上方绕过
-        bypass_y = max_lat + offset_lat
+        # 一上一下，选择较短路径
+        dist_to_top = abs(start_y - bounds['top']) + abs(end_y - bounds['top'])
+        dist_to_bottom = abs(start_y - bounds['bottom']) + abs(end_y - bounds['bottom'])
+        if dist_to_top < dist_to_bottom:
+            bypass_y = bounds['top'] + offset_lat
+        else:
+            bypass_y = bounds['bottom'] - offset_lat
     
-    # 构建路径：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点
+    # 构建完整绕行路径：起点 → 左移 → 绕行 → 右移到终点
     path = [
-        start,                           # 起点
-        [left_x, start[1]],              # 绕行点1：水平向左
-        [left_x, bypass_y],              # 绕行点2：垂直移动到绕行纬度
-        [left_x, end[1]],                # 绕行点3：垂直移动到终点纬度
-        end                              # 终点
+        start,                      # 起点
+        [left_x, start[1]],         # 向左移动到安全X
+        [left_x, bypass_y],         # 垂直移动到绕行Y
+        [left_x, end[1]],           # 垂直移动到终点Y
+        end                         # 终点
     ]
     
     return path
 
 def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
-    """向右绕行：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点"""
-    blocking_obs = []
+    """向右绕行：从右侧完全绕过障碍物"""
+    # 获取障碍物边界
+    bounds = get_combined_obstacle_bounds(obstacles_gcj, flight_altitude)
+    if bounds is None:
+        return [start, end]
+    
+    # 检查是否需要绕行
+    blocked = False
     for obs in obstacles_gcj:
         if obs.get('height', 30) > flight_altitude:
             coords = obs.get('polygon', [])
             if coords and line_intersects_polygon(start, end, coords):
-                blocking_obs.append(obs)
+                blocked = True
+                break
     
-    if not blocking_obs:
+    if not blocked:
         return [start, end]
     
-    # 获取所有阻挡障碍物的边界
-    all_bounds = []
-    for obs in blocking_obs:
-        coords = obs.get('polygon', [])
-        if coords:
-            bounds = get_polygon_bounds(coords)
-            if bounds:
-                all_bounds.append(bounds)
+    # 计算安全偏移（米转度）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 5, start[1])
     
-    if not all_bounds:
-        return [start, end]
+    # 右侧绕行点X坐标（障碍物右边 + 安全距离）
+    right_x = bounds['right'] + offset_lng
     
-    # 合并边界
-    min_lng = min(b['min_lng'] for b in all_bounds)
-    max_lng = max(b['max_lng'] for b in all_bounds)
-    min_lat = min(b['min_lat'] for b in all_bounds)
-    max_lat = max(b['max_lat'] for b in all_bounds)
+    # 确定从上方还是下方绕过
+    center_y = bounds['center_lat']
+    start_y = start[1]
+    end_y = end[1]
     
-    # 计算安全偏移（约100米）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
-    
-    # 右侧绕行点
-    right_x = max_lng + offset_lng
-    
-    # 判断从上方还是下方绕过
-    if start[1] < end[1]:
-        # 从下方绕过
-        bypass_y = min_lat - offset_lat
+    if start_y < center_y and end_y < center_y:
+        bypass_y = bounds['top'] + offset_lat
+    elif start_y > center_y and end_y > center_y:
+        bypass_y = bounds['bottom'] - offset_lat
     else:
-        # 从上方绕过
-        bypass_y = max_lat + offset_lat
+        dist_to_top = abs(start_y - bounds['top']) + abs(end_y - bounds['top'])
+        dist_to_bottom = abs(start_y - bounds['bottom']) + abs(end_y - bounds['bottom'])
+        if dist_to_top < dist_to_bottom:
+            bypass_y = bounds['top'] + offset_lat
+        else:
+            bypass_y = bounds['bottom'] - offset_lat
     
-    # 构建路径：起点 → 绕行点1 → 绕行点2 → 绕行点3 → 终点
+    # 构建完整绕行路径：起点 → 右移 → 绕行 → 左移到终点
     path = [
-        start,                           # 起点
-        [right_x, start[1]],             # 绕行点1：水平向右
-        [right_x, bypass_y],             # 绕行点2：垂直移动到绕行纬度
-        [right_x, end[1]],               # 绕行点3：垂直移动到终点纬度
-        end                              # 终点
+        start,                       # 起点
+        [right_x, start[1]],         # 向右移动到安全X
+        [right_x, bypass_y],         # 垂直移动到绕行Y
+        [right_x, end[1]],           # 垂直移动到终点Y
+        end                          # 终点
     ]
     
     return path
@@ -269,13 +295,8 @@ def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     left_path = find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
     right_path = find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius)
     
-    left_len = 0
-    for i in range(len(left_path) - 1):
-        left_len += distance(left_path[i], left_path[i + 1])
-    
-    right_len = 0
-    for i in range(len(right_path) - 1):
-        right_len += distance(right_path[i], right_path[i + 1])
+    left_len = sum(distance(left_path[i], left_path[i+1]) for i in range(len(left_path)-1))
+    right_len = sum(distance(right_path[i], right_path[i+1]) for i in range(len(right_path)-1))
     
     return left_path if left_len < right_len else right_path
 
@@ -303,7 +324,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v12.4'
+        'version': 'v13.0'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -341,7 +362,6 @@ class HeartbeatSimulator:
             self.total_distance += distance(path[i], path[i + 1])
     
     def update_and_generate(self, obstacles_gcj):
-        """更新无人机位置并生成心跳包"""
         if not self.simulating or self.path_index >= len(self.path) - 1:
             self.simulating = False
             return None
@@ -911,7 +931,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v12.4'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v13.0'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
