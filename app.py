@@ -93,7 +93,59 @@ def get_polygon_bounds(polygon):
         'center_lat': (min_lat + max_lat) / 2
     }
 
-# ==================== 简化的三种避障算法 ====================
+def point_to_segment_distance_deg(point, seg_start, seg_end):
+    px, py = point
+    x1, y1 = seg_start
+    x2, y2 = seg_end
+    
+    dx = x2 - x1
+    dy = y2 - y1
+    len_sq = dx*dx + dy*dy
+    
+    if len_sq == 0:
+        return math.sqrt((px-x1)**2 + (py-y1)**2)
+    
+    t = ((px - x1) * dx + (py - y1) * dy) / len_sq
+    t = max(0, min(1, t))
+    
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    
+    return math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
+
+def point_to_segment_distance_meters(point, seg_start, seg_end):
+    return point_to_segment_distance_deg(point, seg_start, seg_end) * 111000
+
+def check_safety_radius(drone_pos, obstacles_gcj, flight_altitude, safety_radius):
+    if not drone_pos:
+        return True, None, None
+    
+    min_distance = float('inf')
+    danger_name = None
+    
+    for obs in obstacles_gcj:
+        coords = obs.get('polygon', [])
+        obs_height = obs.get('height', 30)
+        
+        if obs_height <= flight_altitude:
+            continue
+        
+        if coords and len(coords) >= 3:
+            for i in range(len(coords)):
+                p1 = coords[i]
+                p2 = coords[(i + 1) % len(coords)]
+                
+                dist_m = point_to_segment_distance_meters(drone_pos, p1, p2)
+                
+                if dist_m < min_distance:
+                    min_distance = dist_m
+                    danger_name = obs.get('name', '障碍物')
+    
+    if min_distance < safety_radius:
+        return False, min_distance, danger_name
+    return True, min_distance if min_distance != float('inf') else None, None
+
+# ==================== 三种避障算法 ====================
 def find_left_path(start, end, obstacles_gcj, flight_altitude):
     """向左绕行：先飞到障碍物左上角，再飞到终点"""
     blocking_obs = []
@@ -224,6 +276,73 @@ class HeartbeatSimulator:
         for i in range(len(path) - 1):
             self.total_distance += distance(path[i], path[i + 1])
     
+    def update_and_generate(self, obstacles_gcj):
+        """更新无人机位置并生成心跳包"""
+        if not self.simulating or self.path_index >= len(self.path) - 1:
+            self.simulating = False
+            return None
+        
+        # 计算移动距离
+        start = self.path[self.path_index]
+        end = self.path[self.path_index + 1]
+        segment_distance = distance(start, end)
+        
+        # 根据速度移动 (基础速度20m/s)
+        base_speed = 20
+        speed_m_per_s = base_speed * (self.speed / 100)
+        move_distance = speed_m_per_s * 0.2  # 0.2秒移动距离
+        
+        self.distance_traveled += move_distance
+        
+        # 更新进度
+        if self.total_distance > 0:
+            self.progress = self.distance_traveled / self.total_distance
+        
+        # 检查是否到达下一个航点
+        if self.distance_traveled >= segment_distance:
+            self.path_index += 1
+            if self.path_index < len(self.path):
+                self.current_pos = self.path[self.path_index].copy()
+                self.distance_traveled = 0
+            else:
+                self.simulating = False
+                return self._generate_heartbeat(True)
+        else:
+            # 线性插值计算当前位置
+            t = self.distance_traveled / segment_distance if segment_distance > 0 else 0
+            lng = start[0] + (end[0] - start[0]) * t
+            lat = start[1] + (end[1] - start[1]) * t
+            self.current_pos = [lng, lat]
+        
+        # 检查安全半径
+        safe, min_dist, danger = check_safety_radius(
+            self.current_pos, obstacles_gcj, self.flight_altitude, self.safety_radius
+        )
+        if not safe:
+            self.safety_violation = True
+        
+        return self._generate_heartbeat(False)
+    
+    def _generate_heartbeat(self, arrived=False):
+        """生成心跳包数据"""
+        heartbeat = {
+            'timestamp': datetime.now().strftime("%H:%M:%S"),
+            'lat': self.current_pos[1],
+            'lng': self.current_pos[0],
+            'altitude': self.flight_altitude,
+            'voltage': round(22.2 + random.uniform(-0.5, 0.5), 1),
+            'satellites': random.randint(8, 14),
+            'speed': round(20 * (self.speed / 100), 1),
+            'progress': self.progress if self.total_distance > 0 else 0,
+            'arrived': arrived,
+            'safety_violation': self.safety_violation
+        }
+        self.history.insert(0, heartbeat)
+        # 限制历史记录长度
+        if len(self.history) > 100:
+            self.history.pop()
+        return heartbeat
+    
     def check_safety(self, obstacles_gcj):
         if not self.simulating:
             return True, None, None
@@ -250,58 +369,6 @@ class HeartbeatSimulator:
         if min_distance < self.safety_radius:
             return False, min_distance, danger_name
         return True, min_distance if min_distance != float('inf') else None, None
-
-def point_to_segment_distance_deg(point, seg_start, seg_end):
-    px, py = point
-    x1, y1 = seg_start
-    x2, y2 = seg_end
-    
-    dx = x2 - x1
-    dy = y2 - y1
-    len_sq = dx*dx + dy*dy
-    
-    if len_sq == 0:
-        return math.sqrt((px-x1)**2 + (py-y1)**2)
-    
-    t = ((px - x1) * dx + (py - y1) * dy) / len_sq
-    t = max(0, min(1, t))
-    
-    proj_x = x1 + t * dx
-    proj_y = y1 + t * dy
-    
-    return math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
-
-def point_to_segment_distance_meters(point, seg_start, seg_end):
-    return point_to_segment_distance_deg(point, seg_start, seg_end) * 111000
-
-def check_safety_radius(drone_pos, obstacles_gcj, flight_altitude, safety_radius):
-    if not drone_pos:
-        return True, None, None
-    
-    min_distance = float('inf')
-    danger_name = None
-    
-    for obs in obstacles_gcj:
-        coords = obs.get('polygon', [])
-        obs_height = obs.get('height', 30)
-        
-        if obs_height <= flight_altitude:
-            continue
-        
-        if coords and len(coords) >= 3:
-            for i in range(len(coords)):
-                p1 = coords[i]
-                p2 = coords[(i + 1) % len(coords)]
-                
-                dist_m = point_to_segment_distance_meters(drone_pos, p1, p2)
-                
-                if dist_m < min_distance:
-                    min_distance = dist_m
-                    danger_name = obs.get('name', '障碍物')
-    
-    if min_distance < safety_radius:
-        return False, min_distance, danger_name
-    return True, min_distance if min_distance != float('inf') else None, None
 
 # ==================== 创建地图 ====================
 def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=None, planned_path=None, map_type="satellite", straight_blocked=True, flight_altitude=50, drone_pos=None, direction="最佳航线", safety_radius=5):
@@ -681,13 +748,14 @@ def main():
             if current_time - st.session_state.last_hb_time >= 0.2:
                 try:
                     new_hb = st.session_state.heartbeat_sim.update_and_generate(st.session_state.obstacles_gcj)
-                    st.session_state.last_hb_time = current_time
-                    st.session_state.flight_history.append([new_hb['lng'], new_hb['lat']])
-                    if len(st.session_state.flight_history) > 200:
-                        st.session_state.flight_history.pop(0)
-                    if not st.session_state.heartbeat_sim.simulating:
-                        st.session_state.simulation_running = False
-                    st.rerun()
+                    if new_hb:
+                        st.session_state.last_hb_time = current_time
+                        st.session_state.flight_history.append([new_hb['lng'], new_hb['lat']])
+                        if len(st.session_state.flight_history) > 200:
+                            st.session_state.flight_history.pop(0)
+                        if not st.session_state.heartbeat_sim.simulating:
+                            st.session_state.simulation_running = False
+                        st.rerun()
                 except Exception as e:
                     st.error(f"更新心跳时出错: {e}")
         else:
@@ -708,8 +776,14 @@ def main():
             col7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
             col8.metric("⚡ 速度系数", f"{drone_speed}%")
             
+            if latest.get('safety_violation', False):
+                st.error("⚠️ 警告：无人机进入安全半径危险区域！")
+            
             progress = latest.get('progress', 0)
             st.progress(progress, text=f"✈️ 飞行进度: {progress*100:.1f}%")
+            
+            if latest.get('arrived', False):
+                st.success("🎉 无人机已到达目的地！")
             
             st.subheader("📍 实时位置")
             tiles = GAODE_SATELLITE_URL if map_type == "satellite" else GAODE_VECTOR_URL
