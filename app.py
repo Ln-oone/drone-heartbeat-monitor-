@@ -151,66 +151,7 @@ def meters_to_deg(meters, lat=32.23):
     lng_deg = meters / (111000 * math.cos(math.radians(lat)))
     return lng_deg, lat_deg
 
-# ==================== 路径平滑算法 ====================
-def smooth_path(points, smooth_factor=0.05):
-    """轻微平滑路径，保持U型形状"""
-    if len(points) <= 2:
-        return points
-    
-    smoothed = []
-    smoothed.append(points[0])
-    
-    for i in range(len(points) - 1):
-        p0 = points[max(0, i-1)]
-        p1 = points[i]
-        p2 = points[i+1]
-        p3 = points[min(len(points)-1, i+2)]
-        
-        num_interpolations = max(2, int(3 * smooth_factor))
-        for t_idx in range(1, num_interpolations):
-            t = t_idx / num_interpolations
-            
-            x = 0.5 * ((2 * p1[0]) + 
-                       (-p0[0] + p2[0]) * t + 
-                       (2*p0[0] - 5*p1[0] + 4*p2[0] - p3[0]) * t**2 + 
-                       (-p0[0] + 3*p1[0] - 3*p2[0] + p3[0]) * t**3)
-            
-            y = 0.5 * ((2 * p1[1]) + 
-                       (-p0[1] + p2[1]) * t + 
-                       (2*p0[1] - 5*p1[1] + 4*p2[1] - p3[1]) * t**2 + 
-                       (-p0[1] + 3*p1[1] - 3*p2[1] + p3[1]) * t**3)
-            
-            smoothed.append([x, y])
-        
-        smoothed.append(p2)
-    
-    return smoothed
-
-def get_obstacle_buffer(polygon, buffer_meters=20):
-    """为障碍物创建缓冲区"""
-    if not polygon or len(polygon) < 3:
-        return polygon
-    
-    center_lng = sum(p[0] for p in polygon) / len(polygon)
-    center_lat = sum(p[1] for p in polygon) / len(polygon)
-    
-    buffered_polygon = []
-    for p in polygon:
-        dx = p[0] - center_lng
-        dy = p[1] - center_lat
-        dist = math.sqrt(dx**2 + dy**2)
-        
-        if dist > 0:
-            scale = 1 + buffer_meters / (dist * 111000)
-            new_lng = center_lng + dx * scale
-            new_lat = center_lat + dy * scale
-            buffered_polygon.append([new_lng, new_lat])
-        else:
-            buffered_polygon.append(p.copy())
-    
-    return buffered_polygon
-
-# ==================== 严格按照U型路径实现左右绕行 ====================
+# ==================== 严格按照标注航线实现 ====================
 def get_blocking_obstacles_info(start, end, obstacles_gcj, flight_altitude):
     """获取阻挡航线的障碍物信息"""
     blocking_obs = []
@@ -218,12 +159,11 @@ def get_blocking_obstacles_info(start, end, obstacles_gcj, flight_altitude):
         if obs.get('height', 30) > flight_altitude:
             coords = obs.get('polygon', [])
             if coords and len(coords) >= 3:
-                buffered_coords = get_obstacle_buffer(coords, 15)
-                if line_intersects_polygon(start, end, buffered_coords):
+                # 直接使用原始多边形，不添加缓冲区
+                if line_intersects_polygon(start, end, coords):
                     blocking_obs.append({
                         'name': obs.get('name', '障碍物'),
-                        'polygon': buffered_coords,
-                        'original_polygon': coords,
+                        'polygon': coords,
                         'height': obs.get('height', 30)
                     })
     return blocking_obs
@@ -249,222 +189,158 @@ def get_merged_obstacle_boundary(blocking_obs):
 
 def find_left_side_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """
-    向左绕行：严格的U型路径
-    路径：起点 → 向左 → 向上/下绕过障碍物顶部/底部 → 向右 → 终点
+    向左绕行 - 严格按照标注航线
+    路径：起点 → 水平向左 → 垂直向下/向上 → 水平向右 → 终点
+    形成标准的"コ"形路径
     """
     blocking_obs = get_blocking_obstacles_info(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
-        return [start, end]
+        return [[start[0], start[1]], [end[0], end[1]]]
     
     boundary = get_merged_obstacle_boundary(blocking_obs)
     if not boundary:
-        return [start, end]
+        return [[start[0], start[1]], [end[0], end[1]]]
     
-    # 计算安全偏移距离（加大偏移确保完全绕过）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 4, start[1])
+    # 计算偏移距离（约50-80米）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
     
-    # 左侧绕行点X坐标
-    left_x = boundary['min_lng'] - offset_lng
+    # 左侧绕行线的X坐标（障碍物最左侧向左偏移）
+    left_line_x = boundary['min_lng'] - offset_lng
     
-    # 计算障碍物的上下边界
-    top_y = boundary['min_lat'] - offset_lat  # 上边界
-    bottom_y = boundary['max_lat'] + offset_lat  # 下边界
-    
-    # 计算从上方绕行和下方绕行的距离
-    up_distance = abs(start[1] - top_y) + abs(end[1] - top_y)
-    down_distance = abs(start[1] - bottom_y) + abs(end[1] - bottom_y)
-    
-    # 选择较短的路径
-    if up_distance <= down_distance:
-        # 从上侧绕行
-        waypoints = [
-            start,
-            [left_x, start[1]],
-            [left_x, top_y],
-            [end[0], top_y],
-            end
-        ]
-        bypass_direction = "上侧"
+    # 计算绕过障碍物的Y坐标
+    # 如果起点纬度 > 终点纬度，从下方绕过；否则从上方绕过
+    if start[1] > end[1]:
+        # 从下方绕过（取障碍物最下方向下偏移）
+        bypass_y = boundary['max_lat'] + offset_lat
     else:
-        # 从下侧绕行
-        waypoints = [
-            start,
-            [left_x, start[1]],
-            [left_x, bottom_y],
-            [end[0], bottom_y],
-            end
-        ]
-        bypass_direction = "下侧"
+        # 从上方绕过（取障碍物最上方向上偏移）
+        bypass_y = boundary['min_lat'] - offset_lat
     
-    # 验证路径是否有效
-    path_valid = True
-    for i in range(len(waypoints) - 1):
-        for obs in blocking_obs:
-            if line_intersects_polygon(waypoints[i], waypoints[i+1], obs['polygon']):
-                path_valid = False
-                break
-        if not path_valid:
-            break
+    # 构建标准"コ"形路径
+    # 起点 -> 水平向左 -> 垂直向下/上 -> 水平向右 -> 终点
+    waypoints = [
+        [start[0], start[1]],           # 起点
+        [left_line_x, start[1]],        # 水平向左
+        [left_line_x, bypass_y],        # 垂直向下/上
+        [end[0], bypass_y],             # 水平向右
+        [end[0], end[1]]                # 终点
+    ]
     
-    if path_valid:
-        # 轻微平滑，保持U型形状
-        return smooth_path(waypoints, 0.05)
-    
-    # 如果首选方向被阻挡，尝试另一个方向
-    if up_distance <= down_distance:
-        # 尝试下侧
-        waypoints = [
-            start,
-            [left_x, start[1]],
-            [left_x, bottom_y],
-            [end[0], bottom_y],
-            end
-        ]
-    else:
-        # 尝试上侧
-        waypoints = [
-            start,
-            [left_x, start[1]],
-            [left_x, top_y],
-            [end[0], top_y],
-            end
-        ]
-    
-    return smooth_path(waypoints, 0.05)
+    return waypoints
 
 def find_right_side_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """
-    向右绕行：严格的U型路径
-    路径：起点 → 向右 → 向上/下绕过障碍物顶部/底部 → 向左 → 终点
+    向右绕行 - 严格按照标注航线
+    路径：起点 → 水平向右 → 垂直向下/向上 → 水平向左 → 终点
+    形成标准的"コ"形路径（镜像）
     """
     blocking_obs = get_blocking_obstacles_info(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
-        return [start, end]
+        return [[start[0], start[1]], [end[0], end[1]]]
     
     boundary = get_merged_obstacle_boundary(blocking_obs)
     if not boundary:
-        return [start, end]
+        return [[start[0], start[1]], [end[0], end[1]]]
     
-    # 计算安全偏移距离（加大偏移确保完全绕过）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 4, start[1])
+    # 计算偏移距离（约50-80米）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
     
-    # 右侧绕行点X坐标
-    right_x = boundary['max_lng'] + offset_lng
+    # 右侧绕行线的X坐标（障碍物最右侧向右偏移）
+    right_line_x = boundary['max_lng'] + offset_lng
     
-    # 计算障碍物的上下边界
-    top_y = boundary['min_lat'] - offset_lat  # 上边界
-    bottom_y = boundary['max_lat'] + offset_lat  # 下边界
-    
-    # 计算从上方绕行和下方绕行的距离
-    up_distance = abs(start[1] - top_y) + abs(end[1] - top_y)
-    down_distance = abs(start[1] - bottom_y) + abs(end[1] - bottom_y)
-    
-    # 选择较短的路径
-    if up_distance <= down_distance:
-        # 从上侧绕行
-        waypoints = [
-            start,
-            [right_x, start[1]],
-            [right_x, top_y],
-            [end[0], top_y],
-            end
-        ]
-        bypass_direction = "上侧"
+    # 计算绕过障碍物的Y坐标
+    if start[1] > end[1]:
+        # 从下方绕过
+        bypass_y = boundary['max_lat'] + offset_lat
     else:
-        # 从下侧绕行
-        waypoints = [
-            start,
-            [right_x, start[1]],
-            [right_x, bottom_y],
-            [end[0], bottom_y],
-            end
-        ]
-        bypass_direction = "下侧"
+        # 从上方绕过
+        bypass_y = boundary['min_lat'] - offset_lat
     
-    # 验证路径是否有效
-    path_valid = True
-    for i in range(len(waypoints) - 1):
-        for obs in blocking_obs:
-            if line_intersects_polygon(waypoints[i], waypoints[i+1], obs['polygon']):
-                path_valid = False
-                break
-        if not path_valid:
-            break
+    # 构建标准"コ"形路径（镜像）
+    # 起点 -> 水平向右 -> 垂直向下/上 -> 水平向左 -> 终点
+    waypoints = [
+        [start[0], start[1]],           # 起点
+        [right_line_x, start[1]],       # 水平向右
+        [right_line_x, bypass_y],       # 垂直向下/上
+        [end[0], bypass_y],             # 水平向左
+        [end[0], end[1]]                # 终点
+    ]
     
-    if path_valid:
-        # 轻微平滑，保持U型形状
-        return smooth_path(waypoints, 0.05)
-    
-    # 如果首选方向被阻挡，尝试另一个方向
-    if up_distance <= down_distance:
-        # 尝试下侧
-        waypoints = [
-            start,
-            [right_x, start[1]],
-            [right_x, bottom_y],
-            [end[0], bottom_y],
-            end
-        ]
-    else:
-        # 尝试上侧
-        waypoints = [
-            start,
-            [right_x, start[1]],
-            [right_x, top_y],
-            [end[0], top_y],
-            end
-        ]
-    
-    return smooth_path(waypoints, 0.05)
+    return waypoints
 
 def find_best_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """最佳航线 - 自动选择最短路径"""
     blocking_obs = get_blocking_obstacles_info(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
-        return [start, end]
+        return [[start[0], start[1]], [end[0], end[1]]]
     
     boundary = get_merged_obstacle_boundary(blocking_obs)
     if not boundary:
-        return [start, end]
+        return [[start[0], start[1]], [end[0], end[1]]]
     
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 4, start[1])
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3, start[1])
     
     left_x = boundary['min_lng'] - offset_lng
     right_x = boundary['max_lng'] + offset_lng
-    top_y = boundary['min_lat'] - offset_lat
-    bottom_y = boundary['max_lat'] + offset_lat
     
-    # 生成4个U型候选路径
+    # 计算上下绕行Y坐标
+    up_y = boundary['min_lat'] - offset_lat
+    down_y = boundary['max_lat'] + offset_lat
+    
+    # 生成4个候选路径
     candidates = []
     
     # 左侧上绕
-    left_up = [start, [left_x, start[1]], [left_x, top_y], [end[0], top_y], end]
+    left_up = [
+        [start[0], start[1]],
+        [left_x, start[1]],
+        [left_x, up_y],
+        [end[0], up_y],
+        [end[0], end[1]]
+    ]
     left_up_dist = sum(distance(left_up[i], left_up[i+1]) for i in range(len(left_up)-1))
     candidates.append(("左侧上绕", left_up_dist, left_up))
     
     # 左侧下绕
-    left_down = [start, [left_x, start[1]], [left_x, bottom_y], [end[0], bottom_y], end]
+    left_down = [
+        [start[0], start[1]],
+        [left_x, start[1]],
+        [left_x, down_y],
+        [end[0], down_y],
+        [end[0], end[1]]
+    ]
     left_down_dist = sum(distance(left_down[i], left_down[i+1]) for i in range(len(left_down)-1))
     candidates.append(("左侧下绕", left_down_dist, left_down))
     
     # 右侧上绕
-    right_up = [start, [right_x, start[1]], [right_x, top_y], [end[0], top_y], end]
+    right_up = [
+        [start[0], start[1]],
+        [right_x, start[1]],
+        [right_x, up_y],
+        [end[0], up_y],
+        [end[0], end[1]]
+    ]
     right_up_dist = sum(distance(right_up[i], right_up[i+1]) for i in range(len(right_up)-1))
     candidates.append(("右侧上绕", right_up_dist, right_up))
     
     # 右侧下绕
-    right_down = [start, [right_x, start[1]], [right_x, bottom_y], [end[0], bottom_y], end]
+    right_down = [
+        [start[0], start[1]],
+        [right_x, start[1]],
+        [right_x, down_y],
+        [end[0], down_y],
+        [end[0], end[1]]
+    ]
     right_down_dist = sum(distance(right_down[i], right_down[i+1]) for i in range(len(right_down)-1))
     candidates.append(("右侧下绕", right_down_dist, right_down))
     
     # 选择最短路径
     candidates.sort(key=lambda x: x[1])
-    best_path = candidates[0][2]
     
-    return smooth_path(best_path, 0.05)
+    return candidates[0][2]
 
 def create_avoidance_path(start, end, obstacles_gcj, flight_altitude, direction, safety_radius=5):
     """创建避障路径（主函数）"""
@@ -491,7 +367,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v21.0'
+        'version': 'v22.0'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -636,16 +512,22 @@ def create_planning_map(center_gcj, points_gcj, obstacles_gcj, flight_history=No
         
         if "向左" in direction:
             line_color = "purple"
-            line_label = "向左绕行 (左-上/下-右)"
+            line_label = "向左绕行 (←↓→)"
         elif "向右" in direction:
             line_color = "orange"
-            line_label = "向右绕行 (右-上/下-左)"
+            line_label = "向右绕行 (→↓←)"
         else:
             line_color = "green"
             line_label = "最佳航线"
         
         folium.PolyLine(path_locations, color=line_color, weight=4, opacity=0.9, 
                        popup=f"✈️ {line_label}").add_to(m)
+        
+        # 标记转折点
+        for i, point in enumerate(planned_path[1:-1]):
+            folium.CircleMarker([point[1], point[0]], radius=5, color=line_color, 
+                              fill=True, fill_color="white", fill_opacity=0.8, 
+                              popup=f"航点 {i+1}").add_to(m)
     
     # 绘制直线航线对比
     if points_gcj.get('A') and points_gcj.get('B'):
@@ -763,7 +645,7 @@ def main():
         f"📌 直线路径: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}\n"
         f"✈️ 飞行高度: {flight_alt} m\n"
         f"🛡️ 安全半径: {safety_radius} 米\n"
-        f"✨ 航线特性: U型绕行路径"
+        f"✨ 航线特性: 直角U型绕行路径"
     )
     
     if st.sidebar.button("🔄 刷新数据", use_container_width=True):
@@ -787,7 +669,7 @@ def main():
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度）")
         
-        st.info("📝 **绕行说明**：向左绕行→左-上/下-右 | 向右绕行→右-上/下-左 | 最佳航线→自动选择最短U型路径")
+        st.info("📝 **绕行说明**：向左绕行→←↓→ | 向右绕行→→↓← | 最佳航线→自动选择最短路径")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -880,7 +762,7 @@ def main():
                     safety_radius
                 )
                 if st.session_state.planned_path:
-                    st.success(f"✅ 已规划U型避障路径，共 {len(st.session_state.planned_path)} 个航点")
+                    st.success(f"✅ 已规划直角U型避障路径，共 {len(st.session_state.planned_path)} 个航点")
                 st.rerun()
             
             st.markdown("#### ✈️ 飞行参数")
@@ -898,7 +780,7 @@ def main():
                     st.session_state.heartbeat_sim.set_path(path, flight_alt, drone_speed, safety_radius)
                     st.session_state.simulation_running = True
                     st.session_state.flight_history = []
-                    st.success(f"🚁 飞行已开始！使用「{st.session_state.current_direction}」U型航线")
+                    st.success(f"🚁 飞行已开始！使用「{st.session_state.current_direction}」直角U型航线")
             
             with col_btn2:
                 if st.button("⏹️ 停止飞行", use_container_width=True):
@@ -923,8 +805,8 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("🟣 向左绕行 (左-上/下-右) | 🟠 向右绕行 (右-上/下-左) | 🟢 最佳航线")
-            st.caption("🔴 红色=需避让障碍物 | 📐 U型绕行路径")
+            st.caption("🟣 向左绕行 (←↓→) | 🟠 向右绕行 (→↓←) | 🟢 最佳航线")
+            st.caption("🔴 红色=需避让障碍物 | 📐 直角U型绕行路径")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
             center = st.session_state.points_gcj['A'] or SCHOOL_CENTER_GCJ
@@ -1121,7 +1003,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v21.0'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v22.0'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
