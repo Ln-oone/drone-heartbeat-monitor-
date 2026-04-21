@@ -237,7 +237,7 @@ def find_right_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5)
 def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     """
     向左绕行 - 3个绕行点
-    路径：起点 → 向下 → 向右 → 向上 → 终点（从下方绕过障碍物）
+    路径：起点 → 向上到障碍物顶部左侧 → 向右到障碍物右侧顶部 → 到终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -251,13 +251,19 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
     # 计算偏移距离
     offset_lng, offset_lat = meters_to_deg(safety_radius * 2, start[1])
     
-    # 向下绕过障碍物底部
-    bottom_y = bounds['max_lat'] + offset_lat * 1.5
+    # 障碍物顶部Y坐标
+    top_y = bounds['min_lat'] - offset_lat * 1.5
+    
+    # 障碍物左侧X坐标
+    left_x = bounds['min_lng'] - offset_lng
+    
+    # 障碍物右侧X坐标
+    right_x = bounds['max_lng'] + offset_lng
     
     # 三个绕行点
-    waypoint1 = [start[0], bottom_y]           # 第1个绕行点：向下到底部
-    waypoint2 = [end[0], bottom_y]             # 第2个绕行点：向右到终点下方
-    waypoint3 = [end[0], end[1]]               # 第3个绕行点：向上到终点
+    waypoint1 = [left_x, top_y]                # 第1个绕行点：向上到障碍物顶部左侧附近
+    waypoint2 = [right_x, top_y]               # 第2个绕行点：向右到障碍物右侧顶部
+    waypoint3 = [end[0], end[1]]               # 第3个绕行点：到终点
     
     # 验证路径是否安全
     if (is_path_clear(start, waypoint1, blocking_obs) and
@@ -266,14 +272,11 @@ def find_left_path(start, end, obstacles_gcj, flight_altitude, safety_radius=5):
         return [start, waypoint1, waypoint2, waypoint3]
     
     # 如果被阻挡，尝试更大的偏移
-    bottom_y = bounds['max_lat'] + offset_lat * 2.5
-    waypoint1 = [start[0], bottom_y]
-    waypoint2 = [end[0], bottom_y]
-    
-    if (is_path_clear(start, waypoint1, blocking_obs) and
-        is_path_clear(waypoint1, waypoint2, blocking_obs) and
-        is_path_clear(waypoint2, end, blocking_obs)):
-        return [start, waypoint1, waypoint2, end]
+    top_y = bounds['min_lat'] - offset_lat * 2.5
+    left_x = bounds['min_lng'] - offset_lng * 1.5
+    right_x = bounds['max_lng'] + offset_lng * 1.5
+    waypoint1 = [left_x, top_y]
+    waypoint2 = [right_x, top_y]
     
     return [start, waypoint1, waypoint2, end]
 
@@ -312,7 +315,7 @@ def save_obstacles(obstacles):
         'obstacles': obstacles,
         'count': len(obstacles),
         'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'version': 'v26.0'
+        'version': 'v27.0'
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -615,7 +618,7 @@ def main():
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度）")
         
-        st.info("📝 **绕行说明**：向右绕行→1个绕行点（右侧绕过）| 向左绕行→3个绕行点（下方绕过）| 航线自动避开障碍物")
+        st.info("📝 **绕行说明**：向右绕行→1个绕行点（右侧绕过）| 向左绕行→3个绕行点（从顶部绕过）")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -753,7 +756,7 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("🟣 向左绕行（3个绕行点：向下→向右→向上）| 🟠 向右绕行（1个绕行点：向右）| 🟢 最佳航线")
+            st.caption("🟣 向左绕行（3个绕行点：向上→向右→到终点）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
@@ -951,7 +954,7 @@ def main():
                 else:
                     st.warning("无配置文件")
         with col_save_load3:
-            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v26.0'}
+            config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v27.0'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
         
         st.markdown("---")
