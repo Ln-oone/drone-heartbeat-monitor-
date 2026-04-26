@@ -306,7 +306,7 @@ def find_left_boundary_path(start: List[float], end: List[float],
                            obstacles: List[Dict], safety_radius: float = 5) -> List[List[float]]:
     """
     向左绕行 - 严格按照图片要求：沿着障碍物左侧边界走，绝对不能碰到障碍物
-    路径：起点 → 垂直移动到障碍物左侧边界 → 沿着左侧边界向下/向上移动 → 垂直移动到终点
+    路径：起点 → 水平移动到左侧边界 → 沿着左侧边界向下/向上移动 → 水平移动到终点
     """
     if not obstacles:
         return [start, end]
@@ -336,68 +336,40 @@ def find_left_boundary_path(start: List[float], end: List[float],
     # 构建沿着左侧边界的路径点
     waypoints = []
     
-    # 1. 从起点垂直移动到左侧边界（保持起点Y不变，X变到boundary_x）
+    # 1. 从起点水平移动到左侧边界（保持起点Y不变，X变到boundary_x）
     waypoints.append([boundary_x, start[1]])
     
     # 2. 沿着左侧边界移动到终点Y位置
-    # 如果起点Y > 终点Y，需要向上移动；否则向下移动
-    if start[1] > end[1]:
-        # 向上移动，经过障碍物的上边界
-        waypoints.append([boundary_x, min_y - offset_lat])
-        waypoints.append([boundary_x, end[1]])
-    else:
-        # 向下移动，经过障碍物的下边界
+    # 根据起点和终点的Y坐标，决定移动方向
+    if end[1] > start[1]:
+        # 终点在下，从起点向下移动到终点Y
+        # 先移动到障碍物底部外侧
         waypoints.append([boundary_x, max_y + offset_lat])
         waypoints.append([boundary_x, end[1]])
+    else:
+        # 终点在上，从起点向上移动到终点Y
+        # 先移动到障碍物顶部外侧
+        waypoints.append([boundary_x, min_y - offset_lat])
+        waypoints.append([boundary_x, end[1]])
     
-    # 3. 从左侧边界垂直移动到终点（保持终点Y不变，X变到end[0]）
+    # 3. 从左侧边界水平移动到终点（保持终点Y不变，X变到end[0]）
     waypoints.append([end[0], end[1]])
     
-    # 构建完整路径
-    full_path = [start] + waypoints
-    
-    # 验证路径是否安全，如果不安全则插入更多中间点
-    refined_path = [start]
-    
-    for i in range(len(full_path) - 1):
-        current = full_path[i]
-        next_point = full_path[i + 1]
-        
-        # 检查线段是否安全（不碰到任何障碍物）
-        collision = False
-        for obs in obstacles:
-            coords = obs.get('polygon', [])
-            if coords and line_intersects_polygon(current, next_point, coords):
-                collision = True
-                break
-        
-        if collision:
-            # 如果碰撞，在两点之间插入更多中间点（细化路径）
-            steps = 20
-            for step in range(1, steps + 1):
-                t = step / steps
-                mid_lat = current[1] * (1 - t) + next_point[1] * t
-                mid_point = [boundary_x, mid_lat]
-                
-                # 检查中间点是否安全
-                safe = True
-                for obs in obstacles:
-                    if point_in_polygon(mid_point, obs.get('polygon', [])):
-                        safe = False
-                        break
-                
-                if safe:
-                    if len(refined_path) == 0 or (abs(refined_path[-1][0] - mid_point[0]) > 1e-10 or abs(refined_path[-1][1] - mid_point[1]) > 1e-10):
-                        refined_path.append(mid_point)
-        else:
-            if len(refined_path) == 0 or (abs(refined_path[-1][0] - next_point[0]) > 1e-10 or abs(refined_path[-1][1] - next_point[1]) > 1e-10):
-                refined_path.append(next_point)
+    # 构建完整路径并去重
+    full_path = [start]
+    for wp in waypoints:
+        if len(full_path) == 0 or (abs(full_path[-1][0] - wp[0]) > 1e-10 or abs(full_path[-1][1] - wp[1]) > 1e-10):
+            full_path.append(wp)
     
     # 确保终点在路径中
-    if len(refined_path) == 0 or (abs(refined_path[-1][0] - end[0]) > 1e-10 or abs(refined_path[-1][1] - end[1]) > 1e-10):
-        refined_path.append(end)
+    if len(full_path) == 0 or (abs(full_path[-1][0] - end[0]) > 1e-10 or abs(full_path[-1][1] - end[1]) > 1e-10):
+        full_path.append(end)
     
-    return refined_path
+    logger.info(f"向左绕行路径生成: {len(full_path)}个点")
+    for i, p in enumerate(full_path):
+        logger.info(f"  点{i}: ({p[0]:.6f}, {p[1]:.6f})")
+    
+    return full_path
 
 def find_best_path(start: List[float], end: List[float], 
                   obstacles_gcj: List[Dict], flight_altitude: float, 
@@ -517,7 +489,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.4'
+            'version': 'v27.5'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -756,7 +728,7 @@ def create_planning_map(center_gcj: List[float], points_gcj: Dict,
     
     return m
 
-# ==================== 主程序（简化版，核心功能保留）====================
+# ==================== 主程序 ====================
 def main():
     st.markdown("""
     <style>
@@ -864,7 +836,7 @@ def main():
         f"📌 直线路径: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}\n"
         f"✈️ 飞行高度: {flight_alt} m\n"
         f"🛡️ 安全半径: {safety_radius} 米\n"
-        f"✨ 绕行策略: 向右=1个绕行点 | 向左=沿边界绕行（不触碰）"
+        f"✨ 绕行策略: 向右=1个绕行点 | 向左=沿边界绕行（绝不触碰）"
     )
     
     col_refresh1, col_refresh2 = st.sidebar.columns(2)
@@ -1150,7 +1122,7 @@ def main():
                         st.session_state.pending_obstacle = None
                         st.rerun()
     
-    # ==================== 飞行监控页面（简化）====================
+    # ==================== 飞行监控页面 ====================
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {safety_radius} 米")
@@ -1291,7 +1263,7 @@ def main():
         else:
             st.info("⏳ 等待心跳数据... 请在「航线规划」页面点击「开始飞行」")
     
-    # ==================== 障碍物管理页面（简化）====================
+    # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         
@@ -1363,7 +1335,7 @@ def main():
                     'obstacles': st.session_state.obstacles_gcj, 
                     'count': len(st.session_state.obstacles_gcj), 
                     'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                    'version': 'v27.4'
+                    'version': 'v27.5'
                 }
                 st.download_button(
                     label="📥 下载配置", 
