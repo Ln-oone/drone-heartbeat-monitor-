@@ -412,7 +412,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.7'
+            'version': 'v27.8'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -430,7 +430,7 @@ class HeartbeatSimulator:
         self.path_index = 0
         self.simulating = False
         self.flight_altitude = DEFAULT_FLIGHT_ALTITUDE
-        self.speed_percent = 100  # 默认100%速度
+        self.speed_percent = 100
         self.progress = 0.0
         self.total_distance_meters = 0.0
         self.distance_traveled_meters = 0.0
@@ -439,8 +439,8 @@ class HeartbeatSimulator:
         self.start_time = None
         self.flight_log = []
         self.last_update_time = None
-        # 基础速度设为 60 m/s，让600米距离在10秒完成（进度变化明显）
-        self.base_speed_ms = 60.0  # 约216 km/h
+        # 真实速度 4 m/s（约14.4 km/h）
+        self.base_speed_ms = 4.0
         
     def set_path(self, path: List[List[float]], altitude: float = 50, 
                  speed_percent: float = 100, safety_radius: float = 5):
@@ -484,12 +484,6 @@ class HeartbeatSimulator:
                 self.simulating = False
                 logger.info("飞行任务完成")
             return None
-        
-        # 控制更新频率（每秒更新5次，即0.2秒一次）
-        current_time = time.time()
-        if self.last_update_time and (current_time - self.last_update_time) < 0.2:
-            return None
-        self.last_update_time = current_time
         
         start = self.path[self.path_index]
         end = self.path[self.path_index + 1]
@@ -757,6 +751,12 @@ def main():
         text-align: center;
         font-weight: bold;
     }
+    .auto-refresh {
+        color: #ff9800;
+        font-size: 12px;
+        text-align: center;
+        padding: 5px;
+    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -793,6 +793,17 @@ def main():
         st.session_state.auto_backup = True
     if "flight_started" not in st.session_state:
         st.session_state.flight_started = False
+    if "auto_refresh" not in st.session_state:
+        st.session_state.auto_refresh = True
+    
+    # 自动刷新控制（放在侧边栏）
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔄 自动刷新")
+    auto_refresh = st.sidebar.checkbox("启用自动刷新（实时监控）", value=st.session_state.auto_refresh)
+    st.session_state.auto_refresh = auto_refresh
+    
+    if auto_refresh and st.session_state.simulation_running:
+        st.sidebar.markdown('<div class="auto-refresh">✅ 实时更新中...</div>', unsafe_allow_html=True)
     
     # 侧边栏
     st.sidebar.title("🎛️ 导航菜单")
@@ -804,24 +815,24 @@ def main():
     st.sidebar.subheader("⚡ 无人机速度设置")
     
     # 速度说明
-    st.sidebar.caption("💡 基础速度: 60 m/s (216 km/h)")
-    st.sidebar.caption("⚡ 默认100%速度，600米约10秒完成")
+    st.sidebar.caption("💡 真实速度: 4 m/s (14.4 km/h)")
+    st.sidebar.caption("⏱️ 600米约150秒完成")
     
     drone_speed_percent = st.sidebar.slider(
         "速度系数", 
-        min_value=10, 
+        min_value=30, 
         max_value=100, 
-        value=100,  # 默认100%
+        value=100,  # 默认100% = 4 m/s
         step=10,
-        help="100% = 60 m/s，600米约10秒完成"
+        help="100% = 4 m/s，降低速度可观察更久"
     )
-    actual_speed = 60.0 * (drone_speed_percent / 100)
+    actual_speed = 4.0 * (drone_speed_percent / 100)
     st.sidebar.info(f"📊 实际速度: **{actual_speed:.1f} m/s** ({actual_speed*3.6:.0f} km/h)")
     
     # 计算预计时间（基于默认起点终点距离）
     default_distance = distance_meters(DEFAULT_A_GCJ, DEFAULT_B_GCJ)
     est_time = default_distance / actual_speed if actual_speed > 0 else 0
-    st.sidebar.success(f"⏱️ 预计飞行时间: {est_time:.1f} 秒")
+    st.sidebar.info(f"⏱️ 预计飞行时间: {est_time:.0f} 秒 ({est_time/60:.1f} 分钟)")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("✈️ 无人机飞行高度")
@@ -1067,7 +1078,7 @@ def main():
                         st.write(f"💨 当前速度: {status['speed']:.1f} m/s ({status['speed']*3.6:.0f} km/h)")
                         st.write(f"📏 已飞距离: {status['traveled_distance']:.0f} / {status['total_distance']:.0f} 米")
                         if status['remaining_time'] > 0:
-                            st.write(f"⏱️ 预计剩余时间: {status['remaining_time']:.1f} 秒")
+                            st.write(f"⏱️ 预计剩余时间: {status['remaining_time']:.0f} 秒")
                 else:
                     st.markdown('<div class="flight-status-stopped">⏹️ 飞行状态: 已停止</div>', unsafe_allow_html=True)
                 
@@ -1094,7 +1105,7 @@ def main():
                                                             st.session_state.planned_path[i+1])
                     estimated_time = total_dist_meters / actual_speed if actual_speed > 0 else 0
                     st.caption(f"📏 规划路径总长: {total_dist_meters:.0f} 米")
-                    st.caption(f"⏱️ 预计飞行时间: {estimated_time:.1f} 秒")
+                    st.caption(f"⏱️ 预计飞行时间: {estimated_time:.0f} 秒 ({estimated_time/60:.1f} 分钟)")
                 
                 st.markdown("---")
                 
@@ -1127,7 +1138,7 @@ def main():
                                 - 安全半径: {safety_radius}米
                                 - 飞行速度: {actual_speed:.1f} m/s ({actual_speed*3.6:.0f} km/h)
                                 - 总距离: {total_dist_meters:.0f}米
-                                - 预计时间: {est_time:.1f}秒
+                                - 预计时间: {est_time:.0f}秒 ({est_time/60:.1f}分钟)
                                 """)
                                 st.rerun()
                             else:
@@ -1158,7 +1169,7 @@ def main():
             st.subheader("🗺️ 规划地图")
             st.caption("🟣 向左绕行（3个绕行点）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
-            st.caption(f"⚡ 当前速度: {actual_speed:.1f} m/s | ⏱️ 约{est_time:.1f}秒完成")
+            st.caption(f"⚡ 当前速度: {actual_speed:.1f} m/s | ⏱️ 约{est_time:.0f}秒完成")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20] 
                           if 'lng' in hb and 'lat' in hb]
@@ -1237,12 +1248,13 @@ def main():
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {safety_radius} 米")
-        st.caption(f"⚡ 飞行速度: {actual_speed:.1f} m/s ({actual_speed*3.6:.0f} km/h) | ⏱️ 更新频率: 5次/秒")
+        st.caption(f"⚡ 飞行速度: {actual_speed:.1f} m/s ({actual_speed*3.6:.0f} km/h) | ⏱️ 自动更新中...")
         
-        # 实时更新心跳包
+        # 实时更新心跳包（自动刷新）
         current_time = time.time()
-        if st.session_state.simulation_running:
-            if current_time - st.session_state.last_hb_time >= 0.2:
+        if st.session_state.simulation_running and st.session_state.auto_refresh:
+            # 每0.5秒自动更新一次
+            if current_time - st.session_state.last_hb_time >= 0.5:
                 try:
                     new_hb = st.session_state.heartbeat_sim.update_and_generate(st.session_state.obstacles_gcj)
                     if new_hb:
@@ -1258,8 +1270,6 @@ def main():
                 except Exception as e:
                     st.error(f"更新心跳时出错: {e}")
                     logger.error(f"心跳更新错误: {e}")
-        else:
-            st.session_state.last_hb_time = current_time
         
         # 显示最新心跳数据
         if st.session_state.heartbeat_sim.history:
@@ -1281,7 +1291,10 @@ def main():
             
             # 航点信息
             if 'current_waypoint' in latest and 'total_waypoints' in latest:
-                st.info(f"📍 航点进度: {latest['current_waypoint']}/{latest['total_waypoints']}")
+                col10, col11, col12 = st.columns(3)
+                col10.metric("📍 当前航点", f"{latest['current_waypoint']}")
+                col11.metric("📍 总航点", f"{latest['total_waypoints']}")
+                col12.metric("📏 已飞距离", f"{latest.get('traveled_distance', 0):.0f} m")
             
             # 安全警告
             if latest.get('safety_violation', False):
@@ -1346,7 +1359,7 @@ def main():
             
             # 当前位置标记
             folium.Marker([latest['lat'], latest['lng']], 
-                         popup=f"当前位置\n高度: {latest['altitude']}m\n速度: {latest['speed']:.1f}m/s", 
+                         popup=f"当前位置\n高度: {latest['altitude']}m\n速度: {latest['speed']:.1f}m/s\n进度: {progress}%", 
                          icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
             
             # 起点终点标记
@@ -1401,6 +1414,16 @@ def main():
                 csv = df.to_csv(index=False)
                 st.download_button("下载CSV文件", csv, 
                                  f"flight_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            
+            # 手动刷新按钮
+            col_manual1, col_manual2 = st.columns(2)
+            with col_manual1:
+                if st.button("🔄 手动刷新", use_container_width=True):
+                    st.rerun()
+            with col_manual2:
+                if st.button("🗑️ 清空历史", use_container_width=True):
+                    st.session_state.heartbeat_sim.history = []
+                    st.rerun()
         
         else:
             st.info("⏳ 等待心跳数据... 请在「航线规划」页面点击「开始飞行」")
@@ -1415,17 +1438,16 @@ def main():
             4. 选择绕行策略（最佳航线/向左绕行/向右绕行）
             5. 点击「开始飞行」按钮
             
-            💡 **速度设置（已优化）**: 
-            - 基础速度: **60 m/s** (216 km/h)
-            - **默认100%速度**，600米约10秒完成
-            - 进度变化明显，从0%到100%约10秒
-            - 可通过速度系数调节（10%-100%），最低6 m/s
+            💡 **速度设置（真实速度）**: 
+            - 基础速度: **4 m/s** (14.4 km/h，真实无人机速度)
+            - **默认100%速度**，600米约150秒（2.5分钟）完成
+            - 进度会平滑增长，每0.5秒自动更新
+            - 可通过速度系数调节
             
-            📊 **飞行特点**:
-            - 进度基于实际飞行距离计算
-            - 每0.2秒更新一次位置（5次/秒）
-            - 实时显示剩余距离和预计时间
-            - 进度条会快速平滑增长
+            🚀 **自动刷新功能**:
+            - 启用侧边栏的"自动刷新"开关
+            - 飞行数据会自动更新，无需手动刷新
+            - 实时显示进度、位置、速度等
             """)
     
     # ==================== 障碍物管理页面 ====================
@@ -1463,7 +1485,7 @@ def main():
                 'obstacles': st.session_state.obstacles_gcj, 
                 'count': len(st.session_state.obstacles_gcj), 
                 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                'version': 'v27.7'
+                'version': 'v27.8'
             }
             st.download_button(
                 label="📥 下载配置", 
