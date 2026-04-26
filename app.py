@@ -305,8 +305,11 @@ def find_right_path(start: List[float], end: List[float],
 def find_left_boundary_path(start: List[float], end: List[float], 
                            obstacles: List[Dict], safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行 - 沿着障碍物左侧边界，然后连接到终点
-    严格按照图片要求：红色障碍物，航线沿左侧边界向终点靠近
+    向左绕行 - 严格按照图片要求：
+    1. 从起点水平向左移动到障碍物左侧
+    2. 沿障碍物左侧边界垂直移动到终点高度
+    3. 水平向右连接到终点
+    4. 绝对不能碰到红色障碍物
     """
     if not obstacles:
         return [start, end]
@@ -321,76 +324,74 @@ def find_left_boundary_path(start: List[float], end: List[float],
     if not all_boundary_points:
         return [start, end]
     
-    # 计算偏移量（安全距离）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 1.5, start[1])
+    # 计算安全偏移量（确保不碰到障碍物）
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 1.2, start[1])
     
     # 获取障碍物最左侧的X坐标
     leftmost_x = min(p[0] for p in all_boundary_points)
+    # 航线X坐标 = 最左侧X - 安全偏移
     boundary_x = leftmost_x - offset_lng
     
-    # 获取障碍物的Y范围
+    # 获取障碍物的Y范围（用于验证）
     min_y = min(p[1] for p in all_boundary_points)
     max_y = max(p[1] for p in all_boundary_points)
     
-    # 构建绕行路径：起点 -> 沿左侧边界 -> 终点
+    # 严格按照图片的路径规划：
+    # 路径点1: 起点
+    # 路径点2: 水平移动到左侧边界 (boundary_x, start[1])
+    # 路径点3: 沿左侧边界移动到终点高度 (boundary_x, end[1])
+    # 路径点4: 水平移动到终点 (end[0], end[1])
+    
     waypoints = []
+    waypoints.append(start.copy())
+    waypoints.append([boundary_x, start[1]])  # 水平向左到边界
+    waypoints.append([boundary_x, end[1]])    # 沿边界垂直移动
+    waypoints.append(end.copy())              # 水平向右到终点
     
-    # 1. 从起点水平移动到左侧边界
-    waypoints.append([boundary_x, start[1]])
+    # 验证路径是否与障碍物相交，如果相交则增加偏移量
+    max_attempts = 5
+    attempt = 0
+    while attempt < max_attempts:
+        collision = False
+        for i in range(len(waypoints) - 1):
+            if not is_path_clear(waypoints[i], waypoints[i+1], obstacles):
+                collision = True
+                # 增加偏移量
+                offset_lng, offset_lat = meters_to_deg(safety_radius * (2 + attempt), start[1])
+                boundary_x = leftmost_x - offset_lng
+                # 重新生成路径
+                waypoints = [
+                    start.copy(),
+                    [boundary_x, start[1]],
+                    [boundary_x, end[1]],
+                    end.copy()
+                ]
+                break
+        if not collision:
+            break
+        attempt += 1
     
-    # 2. 沿左侧边界移动到与终点Y坐标对齐的位置
-    # 根据起点和终点的位置，决定沿边界的移动方向
-    if end[1] > start[1]:
-        # 终点在下，从起点向下移动到终点Y
-        waypoints.append([boundary_x, end[1]])
-    else:
-        # 终点在上，从起点向上移动到终点Y
-        waypoints.append([boundary_x, end[1]])
-    
-    # 3. 从左侧边界水平移动到终点
-    waypoints.append([end[0], end[1]])
-    
-    # 构建完整路径
-    full_path = [start] + waypoints
-    
-    # 验证并优化路径，确保不触碰障碍物
-    refined_path = [start]
-    
-    for i in range(len(full_path) - 1):
-        current = full_path[i]
-        next_point = full_path[i + 1]
-        
-        # 检查线段是否安全
-        if not is_path_clear(current, next_point, obstacles):
-            # 如果不安全，在中间插入细化点
-            steps = 10
-            for step in range(1, steps + 1):
-                t = step / steps
-                mid_lat = current[1] * (1 - t) + next_point[1] * t
-                mid_lng = boundary_x
-                # 只添加不在障碍物内的点
-                temp_point = [mid_lng, mid_lat]
-                in_obstacle = False
-                for obs in obstacles:
-                    if point_in_polygon(temp_point, obs.get('polygon', [])):
-                        in_obstacle = True
-                        break
-                if not in_obstacle:
-                    refined_path.append(temp_point)
-        else:
-            refined_path.append(next_point)
-    
-    # 去重
-    unique_path = []
-    for point in refined_path:
-        if not unique_path or (abs(point[0] - unique_path[-1][0]) > 1e-10 or abs(point[1] - unique_path[-1][1]) > 1e-10):
-            unique_path.append(point)
+    # 如果仍然有碰撞，使用路径细化
+    if attempt >= max_attempts:
+        refined_path = [start]
+        for i in range(len(waypoints) - 1):
+            current = waypoints[i]
+            next_pt = waypoints[i + 1]
+            
+            # 如果线段与障碍物相交，插入中间点
+            if not is_path_clear(current, next_pt, obstacles):
+                # 在中点插入额外点
+                mid_lat = (current[1] + next_pt[1]) / 2
+                mid_pt = [boundary_x, mid_lat]
+                refined_path.append(mid_pt)
+            refined_path.append(next_pt)
+        waypoints = refined_path
     
     # 确保终点在路径中
-    if unique_path[-1] != end:
-        unique_path.append(end)
+    if waypoints[-1] != end:
+        waypoints.append(end)
     
-    return unique_path
+    return waypoints
 
 def find_best_path(start: List[float], end: List[float], 
                   obstacles_gcj: List[Dict], flight_altitude: float, 
@@ -510,7 +511,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.3'
+            'version': 'v27.4'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -701,7 +702,7 @@ def create_planning_map(center_gcj: List[float], points_gcj: Dict,
         if "向左" in direction:
             line_color = "purple"
             waypoint_count = len(planned_path) - 2
-            line_label = f"向左绕行（沿边界，{waypoint_count}个绕行点）"
+            line_label = f"向左绕行（沿左侧边界，{waypoint_count}个绕行点）"
         elif "向右" in direction:
             line_color = "orange"
             waypoint_count = len(planned_path) - 2
@@ -760,17 +761,6 @@ def main():
     .stButton button:hover {
         transform: translateY(-2px);
         box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    }
-    .css-1d391kg {
-        padding-top: 1rem;
-    }
-    .warning-text {
-        color: #ff4444;
-        font-weight: bold;
-    }
-    .success-text {
-        color: #00ff00;
-        font-weight: bold;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -874,7 +864,7 @@ def main():
         f"📌 直线路径: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}\n"
         f"✈️ 飞行高度: {flight_alt} m\n"
         f"🛡️ 安全半径: {safety_radius} 米\n"
-        f"✨ 绕行策略: 向右=1个绕行点 | 向左=沿边界绕行"
+        f"✨ 绕行策略: 向右=1个绕行点 | 向左=沿左侧边界绕行"
     )
     
     col_refresh1, col_refresh2 = st.sidebar.columns(2)
@@ -910,7 +900,7 @@ def main():
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度）")
         
-        st.info("📝 **绕行说明**：向右绕行→1个绕行点（右侧绕过）| 向左绕行→沿障碍物左侧边界绕行")
+        st.info("📝 **绕行说明**：向右绕行→1个绕行点（右侧绕过）| 向左绕行→沿障碍物左侧边界绕行（不触碰障碍物）")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -1000,7 +990,7 @@ def main():
                             "向左绕行",
                             safety_radius
                         )
-                        st.success("已切换到向左绕行模式（沿边界绕行）")
+                        st.success("已切换到向左绕行模式（沿左侧边界，不触碰障碍物）")
                         st.rerun()
                 
                 with col_dir3:
@@ -1084,7 +1074,7 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("🟣 向左绕行（沿边界绕行）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
+            st.caption("🟣 向左绕行（沿左侧边界，不触碰障碍物）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
@@ -1373,7 +1363,7 @@ def main():
                     'obstacles': st.session_state.obstacles_gcj, 
                     'count': len(st.session_state.obstacles_gcj), 
                     'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                    'version': 'v27.3'
+                    'version': 'v27.4'
                 }
                 st.download_button(
                     label="📥 下载配置", 
