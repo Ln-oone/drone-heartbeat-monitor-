@@ -936,59 +936,23 @@ def main():
             if st.button("💾 一键保存到JSON", use_container_width=True, type="primary"):
                 save_obstacles(st.session_state.obstacles_gcj)
                 st.success(f"已保存到 {CONFIG_FILE}")
-       with col_save_load2:
-    if st.button("📂 一键加载JSON", use_container_width=True):
-        try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    loaded_obstacles = data.get('obstacles', [])
-                    
-                    if loaded_obstacles:
-                        # 验证每个障碍物的数据完整性
-                        valid_obstacles = []
-                        for i, obs in enumerate(loaded_obstacles):
-                            # 检查必要字段
-                            if not obs.get('polygon'):
-                                st.warning(f"障碍物 {obs.get('name', f'第{i+1}个')} 缺少多边形数据，已跳过")
-                                continue
-                            if len(obs['polygon']) < 3:
-                                st.warning(f"障碍物 {obs.get('name', f'第{i+1}个')} 多边形顶点数不足，已跳过")
-                                continue
-                            
-                            # 确保有height字段
-                            if 'height' not in obs:
-                                obs['height'] = 30
-                            
-                            # 确保有name字段
-                            if 'name' not in obs:
-                                obs['name'] = f"建筑物{len(valid_obstacles) + 1}"
-                            
-                            valid_obstacles.append(obs)
-                        
-                        if valid_obstacles:
-                            st.session_state.obstacles_gcj = valid_obstacles
-                            # 重新规划路径
-                            st.session_state.planned_path = create_avoidance_path(
-                                st.session_state.points_gcj['A'],
-                                st.session_state.points_gcj['B'],
-                                st.session_state.obstacles_gcj,
-                                flight_alt,
-                                st.session_state.current_direction,
-                                safety_radius
-                            )
-                            st.success(f"✅ 成功加载 {len(valid_obstacles)} 个障碍物")
-                            st.rerun()
-                        else:
-                            st.error("❌ 配置文件中没有有效的障碍物数据")
-                    else:
-                        st.warning("⚠️ 配置文件中没有障碍物数据")
-            else:
-                st.error(f"❌ 配置文件 {CONFIG_FILE} 不存在")
-        except json.JSONDecodeError as e:
-            st.error(f"❌ JSON解析失败: {str(e)}")
-        except Exception as e:
-            st.error(f"❌ 加载失败: {str(e)}")
+        with col_save_load2:
+            if st.button("📂 一键加载JSON", use_container_width=True):
+                loaded = load_obstacles()
+                if loaded:
+                    st.session_state.obstacles_gcj = loaded
+                    st.session_state.planned_path = create_avoidance_path(
+                        st.session_state.points_gcj['A'],
+                        st.session_state.points_gcj['B'],
+                        st.session_state.obstacles_gcj,
+                        flight_alt,
+                        st.session_state.current_direction,
+                        safety_radius
+                    )
+                    st.success(f"已加载 {len(loaded)} 个障碍物")
+                    st.rerun()
+                else:
+                    st.warning("无配置文件")
         with col_save_load3:
             config_data = {'obstacles': st.session_state.obstacles_gcj, 'count': len(st.session_state.obstacles_gcj), 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'version': 'v27.0'}
             st.download_button(label="📥 下载配置", data=json.dumps(config_data, ensure_ascii=False, indent=2), file_name=CONFIG_FILE, mime="application/json", use_container_width=True)
