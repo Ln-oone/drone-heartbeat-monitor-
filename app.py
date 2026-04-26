@@ -412,7 +412,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.5'
+            'version': 'v27.6'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -439,7 +439,10 @@ class HeartbeatSimulator:
         self.start_time = None
         self.flight_log = []
         self.last_update_time = None
-        self.base_speed_ms = 5.0  # 恢复正常速度 5米/秒
+        # 基础速度设为 40 m/s，让500米距离在12.5秒完成（约13秒）
+        # 配合速度系数，默认50%即20 m/s，约25秒完成
+        # 用户可调节速度系数来控制快慢
+        self.base_speed_ms = 40.0  # 较快速度，让进度明显变化
         
     def set_path(self, path: List[List[float]], altitude: float = 50, 
                  speed_percent: float = 50, safety_radius: float = 5):
@@ -466,7 +469,7 @@ class HeartbeatSimulator:
         actual_speed = self.get_actual_speed()
         estimated_time = self.total_distance_meters / actual_speed if actual_speed > 0 else 0
         
-        logger.info(f"飞行任务开始: 总距离={self.total_distance_meters:.1f}m, 高度={altitude}m, 速度={actual_speed:.2f}m/s, 预计时间={estimated_time:.0f}秒")
+        logger.info(f"飞行任务开始: 总距离={self.total_distance_meters:.1f}m, 高度={altitude}m, 速度={actual_speed:.1f}m/s, 预计时间={estimated_time:.0f}秒")
         
         # 记录初始心跳
         initial_hb = self._generate_heartbeat(False)
@@ -555,7 +558,7 @@ class HeartbeatSimulator:
             'altitude': self.flight_altitude,
             'voltage': round(22.2 + random.uniform(-0.5, 0.5), 1),
             'satellites': random.randint(8, 14),
-            'speed': round(actual_speed, 2),
+            'speed': round(actual_speed, 1),
             'speed_percent': self.speed_percent,
             'progress': round(self.progress * 100, 1),
             'arrived': arrived,
@@ -803,17 +806,24 @@ def main():
     st.sidebar.subheader("⚡ 无人机速度设置")
     
     # 速度说明
-    st.sidebar.caption("💡 基础速度: 5 m/s（正常速度）")
+    st.sidebar.caption("💡 基础速度: 40 m/s | 默认50% = 20 m/s")
+    st.sidebar.caption("📊 500米距离约13-25秒完成（进度可见）")
+    
     drone_speed_percent = st.sidebar.slider(
         "速度系数", 
         min_value=10, 
         max_value=100, 
         value=50, 
         step=10,
-        help="速度系数越高飞行越快"
+        help="速度系数越高飞行越快，进度变化越明显"
     )
-    actual_speed = 5.0 * (drone_speed_percent / 100)
-    st.sidebar.info(f"📊 实际速度: **{actual_speed:.1f} m/s**")
+    actual_speed = 40.0 * (drone_speed_percent / 100)
+    st.sidebar.info(f"📊 实际速度: **{actual_speed:.1f} m/s** ({actual_speed*3.6:.0f} km/h)")
+    
+    # 计算预计时间（基于默认起点终点距离约500米）
+    default_distance = distance_meters(DEFAULT_A_GCJ, DEFAULT_B_GCJ)
+    est_time = default_distance / actual_speed if actual_speed > 0 else 0
+    st.sidebar.caption(f"⏱️ 预计飞行时间: {est_time:.0f} 秒 ({est_time/60:.1f} 分钟)")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("✈️ 无人机飞行高度")
@@ -1117,7 +1127,7 @@ def main():
                                 - 路径类型: {'直线飞行' if waypoint_count == 0 else f'包含{waypoint_count}个绕行点'}
                                 - 飞行高度: {flight_alt}米
                                 - 安全半径: {safety_radius}米
-                                - 飞行速度: {actual_speed:.1f} m/s
+                                - 飞行速度: {actual_speed:.1f} m/s ({actual_speed*3.6:.0f} km/h)
                                 - 总距离: {total_dist_meters:.0f}米
                                 - 预计时间: {est_time:.0f}秒 ({est_time/60:.1f}分钟)
                                 """)
@@ -1150,7 +1160,7 @@ def main():
             st.subheader("🗺️ 规划地图")
             st.caption("🟣 向左绕行（3个绕行点）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
-            st.caption(f"⚡ 当前速度设置: {actual_speed:.1f} m/s")
+            st.caption(f"⚡ 当前速度设置: {actual_speed:.1f} m/s | ⏱️ 约{est_time:.0f}秒完成")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20] 
                           if 'lng' in hb and 'lat' in hb]
@@ -1229,7 +1239,7 @@ def main():
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {safety_radius} 米")
-        st.caption(f"⚡ 飞行速度: {actual_speed:.1f} m/s | ⏱️ 更新频率: 5次/秒")
+        st.caption(f"⚡ 飞行速度: {actual_speed:.1f} m/s ({actual_speed*3.6:.0f} km/h) | ⏱️ 更新频率: 5次/秒")
         
         # 实时更新心跳包
         current_time = time.time()
@@ -1408,8 +1418,10 @@ def main():
             5. 点击「开始飞行」按钮
             
             💡 **速度设置**: 
-            - 基础速度: 5 m/s（正常速度）
-            - 可通过速度系数调节（10%-100%）
+            - 基础速度: 40 m/s（约144 km/h，正常无人机速度）
+            - 默认50% = 20 m/s（约72 km/h）
+            - 500米距离约13-25秒完成，进度变化清晰可见
+            - 可通过速度系数调节快慢
             
             📊 **飞行特点**:
             - 进度基于实际飞行距离计算
@@ -1452,7 +1464,7 @@ def main():
                 'obstacles': st.session_state.obstacles_gcj, 
                 'count': len(st.session_state.obstacles_gcj), 
                 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                'version': 'v27.5'
+                'version': 'v27.6'
             }
             st.download_button(
                 label="📥 下载配置", 
