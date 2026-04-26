@@ -859,18 +859,349 @@ def render_obstacle_dialog():
             st.session_state.pending_obstacle = None
             st.rerun()
 
+# ==================== 飞行监控页面（优化版） ====================
 def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed: int):
+    """渲染飞行监控页面"""
     st.header("📡 飞行监控 - 实时心跳包")
-    st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {st.session_state.safety_radius} 米")
     
+    # 更新飞行模拟
     update_flight_simulation()
     
     if st.session_state.heartbeat_sim.history:
-        display_heartbeat_data(flight_alt, drone_speed)
+        latest = st.session_state.heartbeat_sim.history[0]
+        
+        # 飞行进度条
+        st.markdown("### ✈️ 飞行进度")
+        progress_percent = int(latest.progress * 100)
+        st.progress(latest.progress, text=f"飞行进度：{progress_percent}%")
+        
+        # 主要指标卡片
+        st.markdown("### 📊 实时数据")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.metric(
+                label="⏰ 飞行时间",
+                value=f"{latest.flight_time:.1f}s",
+                delta=None
+            )
+        
+        with col2:
+            st.metric(
+                label="📍 当前位置",
+                value=f"{latest.lat:.6f}, {latest.lng:.6f}",
+                delta=None
+            )
+        
+        with col3:
+            st.metric(
+                label="📏 飞行高度",
+                value=f"{latest.altitude} m",
+                delta=None
+            )
+        
+        with col4:
+            st.metric(
+                label="💨 当前速度",
+                value=f"{latest.speed} m/s",
+                delta=f"{drone_speed}%"
+            )
+        
+        with col5:
+            remaining_dist = latest.remaining_distance
+            st.metric(
+                label="📏 剩余距离",
+                value=f"{remaining_dist:.0f} m",
+                delta=None
+            )
+        
+        # 设备状态
+        st.markdown("### 🔧 设备状态")
+        col6, col7, col8, col9, col10 = st.columns(5)
+        
+        with col6:
+            st.metric(
+                label="🔋 电池电压",
+                value=f"{latest.voltage} V",
+                delta=None
+            )
+        
+        with col7:
+            st.metric(
+                label="🛰️ 卫星数量",
+                value=f"{latest.satellites} 颗",
+                delta=None
+            )
+        
+        with col8:
+            st.metric(
+                label="🎯 任务进度",
+                value=f"{progress_percent}%",
+                delta=None
+            )
+        
+        with col9:
+            st.metric(
+                label="🛡️ 安全半径",
+                value=f"{st.session_state.safety_radius} m",
+                delta=None
+            )
+        
+        with col10:
+            if latest.arrived:
+                status = "✅ 已完成"
+            elif st.session_state.simulation_running:
+                status = "✈️ 飞行中"
+            else:
+                status = "⏸️ 已停止"
+            st.metric(
+                label="📌 飞行状态",
+                value=status,
+                delta=None
+            )
+        
+        # 安全警告
+        if latest.safety_violation:
+            st.error("⚠️ 警告：无人机进入安全半径危险区域！请立即检查！")
+        
+        if latest.arrived:
+            st.success("🎉 无人机已到达目的地！飞行任务完成！")
+        
+        st.markdown("---")
+        
+        # 实时地图
+        st.markdown("### 🗺️ 实时位置追踪")
+        display_monitor_map(map_type, latest, flight_alt)
+        
+        st.markdown("---")
+        
+        # 数据图表
+        st.markdown("### 📈 实时数据图表")
+        col_ch1, col_ch2 = st.columns(2)
+        
+        with col_ch1:
+            st.subheader("📊 飞行高度变化")
+            if len(st.session_state.heartbeat_sim.history) > 1:
+                alt_data = []
+                for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
+                    alt_data.append({"时间": i, "高度(m)": h.altitude})
+                alt_df = pd.DataFrame(alt_data)
+                st.line_chart(alt_df, x="时间", y="高度(m)")
+        
+        with col_ch2:
+            st.subheader("⚡ 速度变化趋势")
+            if len(st.session_state.heartbeat_sim.history) > 1:
+                speed_data = []
+                for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
+                    speed_data.append({"时间": i, "速度(m/s)": h.speed})
+                speed_df = pd.DataFrame(speed_data)
+                st.line_chart(speed_df, x="时间", y="速度(m/s)")
+        
+        # 第三行图表
+        col_ch3, col_ch4 = st.columns(2)
+        
+        with col_ch3:
+            st.subheader("🔋 电压变化")
+            if len(st.session_state.heartbeat_sim.history) > 1:
+                voltage_data = []
+                for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
+                    voltage_data.append({"时间": i, "电压(V)": h.voltage})
+                voltage_df = pd.DataFrame(voltage_data)
+                st.line_chart(voltage_df, x="时间", y="电压(V)")
+        
+        with col_ch4:
+            st.subheader("🛰️ 卫星数量")
+            if len(st.session_state.heartbeat_sim.history) > 1:
+                sat_data = []
+                for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
+                    sat_data.append({"时间": i, "卫星数": h.satellites})
+                sat_df = pd.DataFrame(sat_data)
+                st.line_chart(sat_df, x="时间", y="卫星数")
+        
+        st.markdown("---")
+        
+        # 飞行日志
+        st.markdown("### 📋 飞行日志记录")
+        display_flight_history()
+        
+        # 导出按钮
+        st.markdown("---")
+        col_export1, col_export2, col_export3 = st.columns(3)
+        with col_export1:
+            if st.button("📊 导出完整飞行数据", use_container_width=True, type="primary"):
+                df = st.session_state.heartbeat_sim.export_flight_data()
+                if not df.empty:
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 下载CSV文件",
+                        data=csv,
+                        file_name=f"flight_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+        
+        with col_export2:
+            if st.button("🔄 刷新数据", use_container_width=True):
+                st.rerun()
+        
+        with col_export3:
+            if st.button("⏹️ 停止飞行", use_container_width=True):
+                st.session_state.simulation_running = False
+                st.session_state.heartbeat_sim.simulating = False
+                st.success("飞行已停止")
+                st.rerun()
+                
     else:
         st.info("⏳ 等待心跳数据... 请在「航线规划」页面点击「开始飞行」")
+        
+        # 显示提示卡片
+        st.markdown("---")
+        col_tip1, col_tip2, col_tip3 = st.columns(3)
+        with col_tip1:
+            st.info("💡 提示1：先在航线规划页面设置起点和终点")
+        with col_tip2:
+            st.info("💡 提示2：设置飞行高度和速度系数")
+        with col_tip3:
+            st.info("💡 提示3：点击「开始飞行」按钮启动模拟")
+
+
+def display_monitor_map(map_type: str, latest, flight_alt: float):
+    """显示监控地图"""
+    tiles = config.GAODE_SATELLITE_URL if map_type == "satellite" else config.GAODE_VECTOR_URL
+    monitor_map = folium.Map(location=[latest.lat, latest.lng], zoom_start=18, 
+                             tiles=tiles, attr="高德地图")
+    
+    # 绘制障碍物
+    for obs in st.session_state.obstacles_gcj:
+        coords = obs.get('polygon', [])
+        height = obs.get('height', 30)
+        if coords and len(coords) >= 3:
+            color = "red" if height > flight_alt else "orange"
+            folium.Polygon([[c[1], c[0]] for c in coords], color=color, 
+                          weight=2, fill=True, fill_opacity=0.3,
+                          popup=f"🚧 {obs.get('name')}\n高度: {height}m").add_to(monitor_map)
+    
+    # 绘制规划路径
+    if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
+        if "向左" in st.session_state.current_direction:
+            line_color = "purple"
+        elif "向右" in st.session_state.current_direction:
+            line_color = "orange"
+        else:
+            line_color = "green"
+        folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], 
+                       color=line_color, weight=3, opacity=0.7,
+                       popup=f"规划航线 - {st.session_state.current_direction}").add_to(monitor_map)
+    
+    # 绘制安全半径圈
+    folium.Circle(
+        radius=st.session_state.safety_radius, 
+        location=[latest.lat, latest.lng],
+        color="blue", 
+        weight=2, 
+        fill=True,
+        fill_color="blue", 
+        fill_opacity=0.2,
+        popup=f"🛡️ 安全半径: {st.session_state.safety_radius}米"
+    ).add_to(monitor_map)
+    
+    # 绘制历史轨迹
+    trail = [[hb.lat, hb.lng] for hb in st.session_state.heartbeat_sim.history[:50] 
+             if hb.lat and hb.lng]
+    if len(trail) > 1:
+        folium.PolyLine(trail, color="orange", weight=2, opacity=0.6,
+                       popup="历史飞行轨迹").add_to(monitor_map)
+    
+    # 绘制当前位置
+    folium.Marker(
+        [latest.lat, latest.lng], 
+        popup=f"当前位置\n高度: {latest.altitude}m\n速度: {latest.speed}m/s", 
+        icon=folium.Icon(color='red', icon='plane', prefix='fa')
+    ).add_to(monitor_map)
+    
+    # 绘制起点和终点
+    if st.session_state.points_gcj['A']:
+        folium.Marker(
+            [st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
+            popup="起点 A", 
+            icon=folium.Icon(color='green', icon='play', prefix='fa')
+        ).add_to(monitor_map)
+    
+    if st.session_state.points_gcj['B']:
+        folium.Marker(
+            [st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
+            popup="终点 B", 
+            icon=folium.Icon(color='red', icon='flag-checkered', prefix='fa')
+        ).add_to(monitor_map)
+    
+    # 添加航点标记
+    if st.session_state.planned_path and len(st.session_state.planned_path) > 2:
+        for i, point in enumerate(st.session_state.planned_path[1:-1]):
+            folium.CircleMarker(
+                [point[1], point[0]], 
+                radius=4, 
+                color="yellow", 
+                fill=True,
+                fill_color="yellow",
+                fill_opacity=0.8,
+                popup=f"航点 {i+1}"
+            ).add_to(monitor_map)
+    
+    folium_static(monitor_map, width=900, height=500)
+
+
+def display_flight_history():
+    """显示飞行历史记录"""
+    history_df = st.session_state.heartbeat_sim.export_flight_data()
+    
+    if not history_df.empty:
+        # 显示最近的10条记录
+        display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'voltage', 'satellites', 'remaining_distance']
+        display_cols = [col for col in display_cols if col in history_df.columns]
+        
+        recent_df = history_df[display_cols].head(10)
+        
+        # 重命名列名为中文
+        column_names = {
+            'timestamp': '时间',
+            'flight_time': '飞行时间(s)',
+            'lat': '纬度',
+            'lng': '经度',
+            'altitude': '高度(m)',
+            'speed': '速度(m/s)',
+            'voltage': '电压(V)',
+            'satellites': '卫星数',
+            'remaining_distance': '剩余距离(m)'
+        }
+        recent_df = recent_df.rename(columns=column_names)
+        
+        st.dataframe(recent_df, use_container_width=True)
+        
+        # 显示统计信息
+        st.markdown("### 📊 飞行统计")
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+        
+        with col_stat1:
+            max_speed = history_df['speed'].max() if 'speed' in history_df.columns else 0
+            st.metric("🏁 最高速度", f"{max_speed:.1f} m/s")
+        
+        with col_stat2:
+            avg_speed = history_df['speed'].mean() if 'speed' in history_df.columns else 0
+            st.metric("📈 平均速度", f"{avg_speed:.1f} m/s")
+        
+        with col_stat3:
+            max_alt = history_df['altitude'].max() if 'altitude' in history_df.columns else 0
+            st.metric("⛰️ 最高高度", f"{max_alt:.0f} m")
+        
+        with col_stat4:
+            total_time = history_df['flight_time'].max() if 'flight_time' in history_df.columns else 0
+            st.metric("⏱️ 总飞行时间", f"{total_time:.1f} s")
+    else:
+        st.info("暂无飞行数据")
+
 
 def update_flight_simulation():
+    """更新飞行模拟"""
     current_time = time.time()
     if st.session_state.simulation_running:
         if current_time - st.session_state.last_hb_time >= config.HEARTBEAT_INTERVAL:
@@ -890,111 +1221,12 @@ def update_flight_simulation():
     else:
         st.session_state.last_hb_time = current_time
 
-def display_heartbeat_data(flight_alt: float, drone_speed: int):
-    latest = st.session_state.heartbeat_sim.history[0]
-    
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric("⏰ 时间", latest.timestamp)
-    col2.metric("📍 纬度", f"{latest.lat:.6f}")
-    col3.metric("📍 经度", f"{latest.lng:.6f}")
-    col4.metric("📊 高度", f"{latest.altitude} m")
-    col5.metric("🔋 电压", f"{latest.voltage} V")
-    col6.metric("🛰️ 卫星", latest.satellites)
-    
-    col7, col8, col9 = st.columns(3)
-    col7.metric("💨 速度", f"{latest.speed} m/s")
-    col8.metric("⚡ 速度系数", f"{drone_speed}%")
-    col9.metric("📏 剩余距离", f"{latest.remaining_distance:.0f} m")
-    
-    if latest.safety_violation:
-        st.error("⚠️ 警告：无人机进入安全半径危险区域！请立即检查！")
-    
-    st.progress(latest.progress, text=f"✈️ 飞行进度: {latest.progress*100:.1f}%")
-    
-    if latest.arrived:
-        st.success("🎉 无人机已到达目的地！飞行任务完成！")
-    
-    display_monitor_map(latest, flight_alt)
-    display_flight_charts()
-    display_flight_history()
-
-def display_monitor_map(latest, flight_alt: float):
-    st.subheader("📍 实时位置")
-    
-    tiles = config.GAODE_SATELLITE_URL if map_type == "satellite" else config.GAODE_VECTOR_URL
-    monitor_map = folium.Map(location=[latest.lat, latest.lng], zoom_start=17, tiles=tiles, attr="高德地图")
-    
-    for obs in st.session_state.obstacles_gcj:
-        coords = obs.get('polygon', [])
-        height = obs.get('height', 30)
-        if coords and len(coords) >= 3:
-            color = "red" if height > flight_alt else "orange"
-            folium.Polygon([[c[1], c[0]] for c in coords], color=color, weight=2, fill=True, fill_opacity=0.3, popup=f"🚧 {obs.get('name')}").add_to(monitor_map)
-    
-    if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
-        if "向左" in st.session_state.current_direction:
-            line_color = "purple"
-        elif "向右" in st.session_state.current_direction:
-            line_color = "orange"
-        else:
-            line_color = "green"
-        folium.PolyLine([[p[1], p[0]] for p in st.session_state.planned_path], color=line_color, weight=3, opacity=0.7).add_to(monitor_map)
-    
-    folium.Circle(radius=st.session_state.safety_radius, location=[latest.lat, latest.lng], color="blue", weight=2, fill=True, fill_color="blue", fill_opacity=0.2, popup=f"🛡️ 安全半径: {st.session_state.safety_radius}米").add_to(monitor_map)
-    
-    trail = [[hb.lat, hb.lng] for hb in st.session_state.heartbeat_sim.history[:30] if hb.lat and hb.lng]
-    if len(trail) > 1:
-        folium.PolyLine(trail, color="orange", weight=2, opacity=0.7).add_to(monitor_map)
-    
-    folium.Marker([latest.lat, latest.lng], popup="当前位置", icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
-    
-    if st.session_state.points_gcj['A']:
-        folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], popup="起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(monitor_map)
-    if st.session_state.points_gcj['B']:
-        folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], popup="终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(monitor_map)
-    
-    folium_static(monitor_map, width=800, height=400)
-
-def display_flight_charts():
-    st.subheader("📈 实时数据图表")
-    col_ch1, col_ch2 = st.columns(2)
-    
-    with col_ch1:
-        if len(st.session_state.heartbeat_sim.history) > 1:
-            alt_df = pd.DataFrame({
-                "序号": list(range(min(30, len(st.session_state.heartbeat_sim.history)))),
-                "高度(m)": [h.altitude for h in st.session_state.heartbeat_sim.history[:30]]
-            })
-            st.line_chart(alt_df, x="序号", y="高度(m)")
-    
-    with col_ch2:
-        if len(st.session_state.heartbeat_sim.history) > 1:
-            speed_df = pd.DataFrame({
-                "序号": list(range(min(30, len(st.session_state.heartbeat_sim.history)))),
-                "速度(m/s)": [h.speed for h in st.session_state.heartbeat_sim.history[:30]]
-            })
-            st.line_chart(speed_df, x="序号", y="速度(m/s)")
-
-def display_flight_history():
-    st.subheader("📋 历史心跳记录")
-    history_df = st.session_state.heartbeat_sim.export_flight_data().head(10)
-    if not history_df.empty:
-        display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'voltage', 'satellites']
-        display_cols = [col for col in display_cols if col in history_df.columns]
-        st.dataframe(history_df[display_cols], use_container_width=True)
-    
-    if st.button("📊 导出完整飞行数据", use_container_width=True):
-        df = st.session_state.heartbeat_sim.export_flight_data()
-        if not df.empty:
-            csv = df.to_csv(index=False)
-            st.download_button("下载CSV文件", csv, f"flight_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-
-# ==================== 障碍物管理页面（优化版） ====================
+# ==================== 障碍物管理页面 ====================
 def render_obstacle_management_page(flight_alt: float):
     """渲染障碍物管理页面"""
     st.header("🚧 障碍物管理")
     
-    # 第一行：状态信息
+    # 状态信息
     col_status1, col_status2, col_status3, col_status4 = st.columns(4)
     with col_status1:
         st.info(f"📊 当前共 {len(st.session_state.obstacles_gcj)} 个障碍物")
@@ -1017,7 +1249,7 @@ def render_obstacle_management_page(flight_alt: float):
     
     st.markdown("---")
     
-    # 第二行：数据操作按钮组
+    # 数据操作按钮组
     col_data1, col_data2, col_data3, col_data4, col_data5 = st.columns(5)
     
     with col_data1:
@@ -1084,7 +1316,7 @@ def render_obstacle_management_page(flight_alt: float):
     
     st.markdown("---")
     
-    # 第三行：统计信息
+    # 统计信息
     col_stats1, col_stats2, col_stats3, col_stats4 = st.columns(4)
     with col_stats1:
         high_obs = sum(1 for obs in st.session_state.obstacles_gcj if obs.get('height', 30) > flight_alt)
@@ -1101,7 +1333,7 @@ def render_obstacle_management_page(flight_alt: float):
     
     st.markdown("---")
     
-    # 第四行：批量操作
+    # 批量操作
     st.subheader("🎯 批量操作")
     
     for obs in st.session_state.obstacles_gcj:
@@ -1190,6 +1422,7 @@ def render_obstacle_management_page(flight_alt: float):
     with tab_map:
         render_obstacle_map_view(flight_alt)
 
+
 def render_obstacle_list_view(flight_alt: float):
     st.subheader("📝 障碍物列表")
     st.caption("💡 提示：勾选复选框后可使用批量操作功能")
@@ -1206,6 +1439,7 @@ def render_obstacle_list_view(flight_alt: float):
                     render_obstacle_card(idx, flight_alt, cols[col_idx])
     else:
         st.info("📭 暂无任何障碍物，可以在「地图视图」中绘制添加")
+
 
 def render_obstacle_card(idx: int, flight_alt: float, container):
     obs = st.session_state.obstacles_gcj[idx]
@@ -1243,6 +1477,7 @@ def render_obstacle_card(idx: int, flight_alt: float, container):
                 update_path_after_obstacle_change(flight_alt)
                 st.rerun()
 
+
 def render_obstacle_map_view(flight_alt: float):
     st.subheader("🗺️ 地图视图")
     st.caption("✏️ 使用左上角绘制工具绘制新障碍物 | 🖱️ 点击障碍物查看详细信息 | 🎨 红色=需避让，橙色=安全")
@@ -1276,7 +1511,7 @@ def render_obstacle_map_view(flight_alt: float):
             folium.Polygon([[c[1], c[0]] for c in coords], color=color, weight=3, fill=True, fill_color=color, fill_opacity=0.5, popup=folium.Popup(popup_text, max_width=300)).add_to(obs_map)
     
     folium.Marker([config.DEFAULT_A_GCJ[1], config.DEFAULT_A_GCJ[0]], popup="起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(obs_map)
-    folium.Marker([config.DEFAULT_B_GCJ[1], config.DEFAULT_B_GCJ[0]], popup="终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(obs_map)
+    folium.Marker([config.DEFAULT_B_GCJ[1], config.DEFAULT_B_GCJ[0]], popup="终点", icon=folium.Icon(color='red', icon='flag-checkered', prefix='fa')).add_to(obs_map)
     
     map_output = st_folium(obs_map, width=800, height=550, key="obstacle_map_view", returned_objects=["last_active_drawing"])
     
@@ -1294,12 +1529,14 @@ def render_obstacle_map_view(flight_alt: float):
     if st.session_state.pending_obstacle is not None:
         render_obstacle_dialog()
 
+
 def update_path_after_obstacle_change(flight_alt: float):
     st.session_state.planned_path = create_avoidance_path(
         st.session_state.points_gcj['A'], st.session_state.points_gcj['B'],
         st.session_state.obstacles_gcj, flight_alt,
         st.session_state.current_direction, st.session_state.safety_radius
     )
+
 
 # ==================== 主程序 ====================
 def main():
@@ -1329,6 +1566,7 @@ def main():
         render_flight_monitoring_page(map_type, flight_alt, drone_speed)
     elif page == "🚧 障碍物管理":
         render_obstacle_management_page(flight_alt)
+
 
 if __name__ == "__main__":
     main()
