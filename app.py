@@ -412,7 +412,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.4'
+            'version': 'v27.5'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -432,14 +432,14 @@ class HeartbeatSimulator:
         self.flight_altitude = DEFAULT_FLIGHT_ALTITUDE
         self.speed_percent = 50
         self.progress = 0.0
-        self.total_distance_meters = 0.0  # 总距离（米）
-        self.distance_traveled_meters = 0.0  # 已行驶距离（米）
+        self.total_distance_meters = 0.0
+        self.distance_traveled_meters = 0.0
         self.safety_radius = DEFAULT_SAFETY_RADIUS_METERS
         self.safety_violation = False
         self.start_time = None
         self.flight_log = []
         self.last_update_time = None
-        self.base_speed_ms = 0.3  # 基础速度降低到0.3米/秒，更慢
+        self.base_speed_ms = 5.0  # 恢复正常速度 5米/秒
         
     def set_path(self, path: List[List[float]], altitude: float = 50, 
                  speed_percent: float = 50, safety_radius: float = 5):
@@ -547,12 +547,6 @@ class HeartbeatSimulator:
         
         actual_speed = self.get_actual_speed()
         
-        # 计算当前段剩余距离（用于显示）
-        current_segment_remaining = 0
-        if self.path_index < len(self.path) - 1:
-            current_segment_total = distance_meters(self.path[self.path_index], self.path[self.path_index + 1])
-            current_segment_remaining = max(0, current_segment_total - self.distance_traveled_meters)
-        
         heartbeat = {
             'timestamp': datetime.now().strftime("%H:%M:%S"),
             'flight_time': flight_time,
@@ -569,7 +563,8 @@ class HeartbeatSimulator:
             'remaining_distance': round(remaining_distance_meters, 0),
             'current_waypoint': self.path_index,
             'total_waypoints': len(self.path) - 1,
-            'segment_remaining': round(current_segment_remaining, 0)
+            'traveled_distance': round(self.distance_traveled_meters, 0),
+            'total_distance': round(self.total_distance_meters, 0)
         }
         
         # 保留最近100条记录
@@ -761,14 +756,6 @@ def main():
         text-align: center;
         font-weight: bold;
     }
-    .speed-warning {
-        background-color: #ff9800;
-        color: white;
-        padding: 5px;
-        border-radius: 3px;
-        font-size: 12px;
-        text-align: center;
-    }
     </style>
     """, unsafe_allow_html=True)
     
@@ -816,22 +803,17 @@ def main():
     st.sidebar.subheader("⚡ 无人机速度设置")
     
     # 速度说明
-    st.sidebar.caption("💡 基础速度: 0.3 m/s（非常慢，便于观察）")
+    st.sidebar.caption("💡 基础速度: 5 m/s（正常速度）")
     drone_speed_percent = st.sidebar.slider(
         "速度系数", 
         min_value=10, 
         max_value=100, 
-        value=30, 
+        value=50, 
         step=10,
-        help="速度系数越低飞行越慢，便于观察避障效果"
+        help="速度系数越高飞行越快"
     )
-    actual_speed = 0.3 * (drone_speed_percent / 100)
-    st.sidebar.info(f"📊 实际速度: **{actual_speed:.2f} m/s**")
-    
-    if actual_speed <= 0.2:
-        st.sidebar.markdown('<div class="speed-warning">🐢 超慢速模式 - 适合教学演示</div>', unsafe_allow_html=True)
-    elif actual_speed <= 0.3:
-        st.sidebar.markdown('<div class="speed-warning">🚶 慢速模式 - 便于观察</div>', unsafe_allow_html=True)
+    actual_speed = 5.0 * (drone_speed_percent / 100)
+    st.sidebar.info(f"📊 实际速度: **{actual_speed:.1f} m/s**")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("✈️ 无人机飞行高度")
@@ -890,7 +872,7 @@ def main():
         f"✈️ 飞行高度: {flight_alt} m\n"
         f"🛡️ 安全半径: {safety_radius} 米\n"
         f"✨ 绕行点: 向右=1个 | 向左=3个\n"
-        f"🐌 飞行速度: {actual_speed:.2f} m/s"
+        f"⚡ 飞行速度: {actual_speed:.1f} m/s"
     )
     
     # 刷新按钮
@@ -1074,7 +1056,7 @@ def main():
                         st.markdown('<div class="flight-status-flying">🚁 飞行状态: 飞行中</div>', unsafe_allow_html=True)
                         st.progress(status['progress'], text=f"✈️ 飞行进度: {status['progress_percent']:.1f}%")
                         st.write(f"📍 当前航点: {status['current_waypoint']}/{status['total_waypoints']}")
-                        st.write(f"💨 当前速度: {status['speed']:.2f} m/s")
+                        st.write(f"💨 当前速度: {status['speed']:.1f} m/s")
                         st.write(f"📏 已飞距离: {status['traveled_distance']:.0f} / {status['total_distance']:.0f} 米")
                         if status['remaining_time'] > 0:
                             st.write(f"⏱️ 预计剩余时间: {status['remaining_time']:.0f} 秒")
@@ -1091,7 +1073,7 @@ def main():
                     st.metric("速度系数", f"{drone_speed_percent}%")
                 with col_met3:
                     st.metric("🛡️ 安全半径", f"{safety_radius} 米")
-                    st.caption(f"实际速度: {actual_speed:.2f} m/s")
+                    st.caption(f"实际速度: {actual_speed:.1f} m/s")
                 
                 if st.session_state.planned_path:
                     waypoint_count = len(st.session_state.planned_path) - 2
@@ -1135,7 +1117,7 @@ def main():
                                 - 路径类型: {'直线飞行' if waypoint_count == 0 else f'包含{waypoint_count}个绕行点'}
                                 - 飞行高度: {flight_alt}米
                                 - 安全半径: {safety_radius}米
-                                - 飞行速度: {actual_speed:.2f} m/s
+                                - 飞行速度: {actual_speed:.1f} m/s
                                 - 总距离: {total_dist_meters:.0f}米
                                 - 预计时间: {est_time:.0f}秒 ({est_time/60:.1f}分钟)
                                 """)
@@ -1168,7 +1150,7 @@ def main():
             st.subheader("🗺️ 规划地图")
             st.caption("🟣 向左绕行（3个绕行点）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
-            st.caption(f"🐌 当前速度设置: {actual_speed:.2f} m/s")
+            st.caption(f"⚡ 当前速度设置: {actual_speed:.1f} m/s")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20] 
                           if 'lng' in hb and 'lat' in hb]
@@ -1247,7 +1229,7 @@ def main():
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {safety_radius} 米")
-        st.caption(f"🐌 飞行速度: {actual_speed:.2f} m/s | ⏱️ 更新频率: 5次/秒")
+        st.caption(f"⚡ 飞行速度: {actual_speed:.1f} m/s | ⏱️ 更新频率: 5次/秒")
         
         # 实时更新心跳包
         current_time = time.time()
@@ -1285,13 +1267,13 @@ def main():
             col6.metric("🛰️ 卫星", latest['satellites'])
             
             col7, col8, col9 = st.columns(3)
-            col7.metric("💨 速度", f"{latest.get('speed', 0):.2f} m/s")
+            col7.metric("💨 速度", f"{latest.get('speed', 0):.1f} m/s")
             col8.metric("⚡ 速度系数", f"{latest.get('speed_percent', 50)}%")
             col9.metric("📏 剩余距离", f"{latest.get('remaining_distance', 0):.0f} m")
             
             # 航点信息
             if 'current_waypoint' in latest and 'total_waypoints' in latest:
-                st.info(f"📍 航点进度: {latest['current_waypoint']}/{latest['total_waypoints']} (共{latest['total_waypoints']}个航点)")
+                st.info(f"📍 航点进度: {latest['current_waypoint']}/{latest['total_waypoints']}")
             
             # 安全警告
             if latest.get('safety_violation', False):
@@ -1356,7 +1338,7 @@ def main():
             
             # 当前位置标记
             folium.Marker([latest['lat'], latest['lng']], 
-                         popup=f"当前位置\n高度: {latest['altitude']}m\n速度: {latest['speed']:.2f}m/s", 
+                         popup=f"当前位置\n高度: {latest['altitude']}m\n速度: {latest['speed']:.1f}m/s", 
                          icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
             
             # 起点终点标记
@@ -1401,7 +1383,7 @@ def main():
             st.subheader("📋 历史心跳记录")
             history_df = pd.DataFrame(st.session_state.heartbeat_sim.history[:10])
             # 选择要显示的列
-            display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'progress', 'remaining_distance', 'current_waypoint', 'total_waypoints']
+            display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'progress', 'remaining_distance', 'current_waypoint', 'total_waypoints', 'traveled_distance', 'total_distance']
             display_cols = [col for col in display_cols if col in history_df.columns]
             st.dataframe(history_df[display_cols], use_container_width=True)
             
@@ -1425,16 +1407,14 @@ def main():
             4. 选择绕行策略（最佳航线/向左绕行/向右绕行）
             5. 点击「开始飞行」按钮
             
-            💡 **速度提示**: 
-            - 当前基础速度为 **0.3 m/s**（非常慢）
-            - 可以通过速度系数调节（10%-100%）
-            - 建议使用30%以下速度进行教学演示
+            💡 **速度设置**: 
+            - 基础速度: 5 m/s（正常速度）
+            - 可通过速度系数调节（10%-100%）
             
             📊 **飞行特点**:
-            - 速度慢，便于观察避障效果
-            - 每0.2秒更新一次位置（5次/秒）
-            - 实时显示剩余距离和预计时间
             - 进度基于实际飞行距离计算
+            - 每0.2秒更新一次位置
+            - 实时显示剩余距离和预计时间
             """)
     
     # ==================== 障碍物管理页面 ====================
@@ -1472,7 +1452,7 @@ def main():
                 'obstacles': st.session_state.obstacles_gcj, 
                 'count': len(st.session_state.obstacles_gcj), 
                 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                'version': 'v27.4'
+                'version': 'v27.5'
             }
             st.download_button(
                 label="📥 下载配置", 
