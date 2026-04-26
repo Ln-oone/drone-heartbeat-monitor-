@@ -305,11 +305,8 @@ def find_right_path(start: List[float], end: List[float],
 def find_left_boundary_path(start: List[float], end: List[float], 
                            obstacles: List[Dict], safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行 - 严格按照图片要求：
-    1. 从起点水平向左移动到障碍物左侧
-    2. 沿障碍物左侧边界垂直移动到终点高度
-    3. 水平向右连接到终点
-    4. 绝对不能碰到红色障碍物
+    向左绕行 - 严格按照图片要求：沿着障碍物左侧边界走，绝对不能碰到障碍物
+    路径：起点 → 垂直移动到障碍物左侧边界 → 沿着左侧边界向下/向上移动 → 垂直移动到终点
     """
     if not obstacles:
         return [start, end]
@@ -324,7 +321,7 @@ def find_left_boundary_path(start: List[float], end: List[float],
     if not all_boundary_points:
         return [start, end]
     
-    # 计算安全偏移量（确保不碰到障碍物）
+    # 计算安全偏移量（保持与障碍物的安全距离）
     offset_lng, offset_lat = meters_to_deg(safety_radius * 1.2, start[1])
     
     # 获取障碍物最左侧的X坐标
@@ -332,66 +329,75 @@ def find_left_boundary_path(start: List[float], end: List[float],
     # 航线X坐标 = 最左侧X - 安全偏移
     boundary_x = leftmost_x - offset_lng
     
-    # 获取障碍物的Y范围（用于验证）
+    # 获取障碍物的Y范围
     min_y = min(p[1] for p in all_boundary_points)
     max_y = max(p[1] for p in all_boundary_points)
     
-    # 严格按照图片的路径规划：
-    # 路径点1: 起点
-    # 路径点2: 水平移动到左侧边界 (boundary_x, start[1])
-    # 路径点3: 沿左侧边界移动到终点高度 (boundary_x, end[1])
-    # 路径点4: 水平移动到终点 (end[0], end[1])
-    
+    # 构建沿着左侧边界的路径点
     waypoints = []
-    waypoints.append(start.copy())
-    waypoints.append([boundary_x, start[1]])  # 水平向左到边界
-    waypoints.append([boundary_x, end[1]])    # 沿边界垂直移动
-    waypoints.append(end.copy())              # 水平向右到终点
     
-    # 验证路径是否与障碍物相交，如果相交则增加偏移量
-    max_attempts = 5
-    attempt = 0
-    while attempt < max_attempts:
+    # 1. 从起点垂直移动到左侧边界（保持起点Y不变，X变到boundary_x）
+    waypoints.append([boundary_x, start[1]])
+    
+    # 2. 沿着左侧边界移动到终点Y位置
+    # 如果起点Y > 终点Y，需要向上移动；否则向下移动
+    if start[1] > end[1]:
+        # 向上移动，经过障碍物的上边界
+        waypoints.append([boundary_x, min_y - offset_lat])
+        waypoints.append([boundary_x, end[1]])
+    else:
+        # 向下移动，经过障碍物的下边界
+        waypoints.append([boundary_x, max_y + offset_lat])
+        waypoints.append([boundary_x, end[1]])
+    
+    # 3. 从左侧边界垂直移动到终点（保持终点Y不变，X变到end[0]）
+    waypoints.append([end[0], end[1]])
+    
+    # 构建完整路径
+    full_path = [start] + waypoints
+    
+    # 验证路径是否安全，如果不安全则插入更多中间点
+    refined_path = [start]
+    
+    for i in range(len(full_path) - 1):
+        current = full_path[i]
+        next_point = full_path[i + 1]
+        
+        # 检查线段是否安全（不碰到任何障碍物）
         collision = False
-        for i in range(len(waypoints) - 1):
-            if not is_path_clear(waypoints[i], waypoints[i+1], obstacles):
+        for obs in obstacles:
+            coords = obs.get('polygon', [])
+            if coords and line_intersects_polygon(current, next_point, coords):
                 collision = True
-                # 增加偏移量
-                offset_lng, offset_lat = meters_to_deg(safety_radius * (2 + attempt), start[1])
-                boundary_x = leftmost_x - offset_lng
-                # 重新生成路径
-                waypoints = [
-                    start.copy(),
-                    [boundary_x, start[1]],
-                    [boundary_x, end[1]],
-                    end.copy()
-                ]
                 break
-        if not collision:
-            break
-        attempt += 1
-    
-    # 如果仍然有碰撞，使用路径细化
-    if attempt >= max_attempts:
-        refined_path = [start]
-        for i in range(len(waypoints) - 1):
-            current = waypoints[i]
-            next_pt = waypoints[i + 1]
-            
-            # 如果线段与障碍物相交，插入中间点
-            if not is_path_clear(current, next_pt, obstacles):
-                # 在中点插入额外点
-                mid_lat = (current[1] + next_pt[1]) / 2
-                mid_pt = [boundary_x, mid_lat]
-                refined_path.append(mid_pt)
-            refined_path.append(next_pt)
-        waypoints = refined_path
+        
+        if collision:
+            # 如果碰撞，在两点之间插入更多中间点（细化路径）
+            steps = 20
+            for step in range(1, steps + 1):
+                t = step / steps
+                mid_lat = current[1] * (1 - t) + next_point[1] * t
+                mid_point = [boundary_x, mid_lat]
+                
+                # 检查中间点是否安全
+                safe = True
+                for obs in obstacles:
+                    if point_in_polygon(mid_point, obs.get('polygon', [])):
+                        safe = False
+                        break
+                
+                if safe:
+                    if len(refined_path) == 0 or (abs(refined_path[-1][0] - mid_point[0]) > 1e-10 or abs(refined_path[-1][1] - mid_point[1]) > 1e-10):
+                        refined_path.append(mid_point)
+        else:
+            if len(refined_path) == 0 or (abs(refined_path[-1][0] - next_point[0]) > 1e-10 or abs(refined_path[-1][1] - next_point[1]) > 1e-10):
+                refined_path.append(next_point)
     
     # 确保终点在路径中
-    if waypoints[-1] != end:
-        waypoints.append(end)
+    if len(refined_path) == 0 or (abs(refined_path[-1][0] - end[0]) > 1e-10 or abs(refined_path[-1][1] - end[1]) > 1e-10):
+        refined_path.append(end)
     
-    return waypoints
+    return refined_path
 
 def find_best_path(start: List[float], end: List[float], 
                   obstacles_gcj: List[Dict], flight_altitude: float, 
@@ -702,7 +708,7 @@ def create_planning_map(center_gcj: List[float], points_gcj: Dict,
         if "向左" in direction:
             line_color = "purple"
             waypoint_count = len(planned_path) - 2
-            line_label = f"向左绕行（沿左侧边界，{waypoint_count}个绕行点）"
+            line_label = f"向左绕行（沿边界，{waypoint_count}个绕行点）"
         elif "向右" in direction:
             line_color = "orange"
             waypoint_count = len(planned_path) - 2
@@ -750,18 +756,12 @@ def create_planning_map(center_gcj: List[float], points_gcj: Dict,
     
     return m
 
-# ==================== 主程序 ====================
+# ==================== 主程序（简化版，核心功能保留）====================
 def main():
     st.markdown("""
     <style>
-    .stButton button {
-        width: 100%;
-        transition: all 0.3s ease;
-    }
-    .stButton button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    }
+    .stButton button { width: 100%; transition: all 0.3s ease; }
+    .stButton button:hover { transform: translateY(-2px); box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
     </style>
     """, unsafe_allow_html=True)
     
@@ -864,7 +864,7 @@ def main():
         f"📌 直线路径: {'🚫 被阻挡' if straight_blocked else '✅ 畅通'}\n"
         f"✈️ 飞行高度: {flight_alt} m\n"
         f"🛡️ 安全半径: {safety_radius} 米\n"
-        f"✨ 绕行策略: 向右=1个绕行点 | 向左=沿左侧边界绕行"
+        f"✨ 绕行策略: 向右=1个绕行点 | 向左=沿边界绕行（不触碰）"
     )
     
     col_refresh1, col_refresh2 = st.sidebar.columns(2)
@@ -900,7 +900,7 @@ def main():
         else:
             st.success("✅ 直线航线畅通无阻（所有障碍物高度 ≤ 飞行高度）")
         
-        st.info("📝 **绕行说明**：向右绕行→1个绕行点（右侧绕过）| 向左绕行→沿障碍物左侧边界绕行（不触碰障碍物）")
+        st.info("📝 **绕行说明**：向右绕行→1个绕行点（右侧绕过）| 向左绕行→沿障碍物左侧边界绕行（绝不触碰）")
         
         col1, col2 = st.columns([1, 1.5])
         
@@ -990,7 +990,7 @@ def main():
                             "向左绕行",
                             safety_radius
                         )
-                        st.success("已切换到向左绕行模式（沿左侧边界，不触碰障碍物）")
+                        st.success("已切换到向左绕行模式（沿边界绕行，绝不触碰）")
                         st.rerun()
                 
                 with col_dir3:
@@ -1074,7 +1074,7 @@ def main():
         
         with col2:
             st.subheader("🗺️ 规划地图")
-            st.caption("🟣 向左绕行（沿左侧边界，不触碰障碍物）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
+            st.caption("🟣 向左绕行（沿边界绕行，绝不触碰）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
@@ -1150,7 +1150,7 @@ def main():
                         st.session_state.pending_obstacle = None
                         st.rerun()
     
-    # ==================== 飞行监控页面 ====================
+    # ==================== 飞行监控页面（简化）====================
     elif page == "📡 飞行监控":
         st.header("📡 飞行监控 - 实时心跳包")
         st.caption(f"✈️ 当前飞行高度: {flight_alt} 米 | 🧭 避障策略: {st.session_state.current_direction} | 🛡️ 安全半径: {safety_radius} 米")
@@ -1291,7 +1291,7 @@ def main():
         else:
             st.info("⏳ 等待心跳数据... 请在「航线规划」页面点击「开始飞行」")
     
-    # ==================== 障碍物管理页面 ====================
+    # ==================== 障碍物管理页面（简化）====================
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         
