@@ -403,7 +403,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.1'
+            'version': 'v27.2'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -429,6 +429,7 @@ class HeartbeatSimulator:
         self.safety_violation = False
         self.start_time = None
         self.flight_log = []
+        self.last_update_time = None  # 用于控制更新频率
         
     def set_path(self, path: List[List[float]], altitude: float = 50, 
                  speed: float = 50, safety_radius: float = 5):
@@ -444,12 +445,18 @@ class HeartbeatSimulator:
         self.distance_traveled = 0.0
         self.safety_violation = False
         self.start_time = datetime.now()
+        self.last_update_time = time.time()
+        self.history = []  # 清空历史记录
         
         self.total_distance = 0.0
         for i in range(len(path) - 1):
             self.total_distance += distance(path[i], path[i + 1])
         
         logger.info(f"飞行任务开始: 总距离={self.total_distance*111000:.1f}m, 高度={altitude}m")
+        
+        # 记录初始心跳
+        initial_hb = self._generate_heartbeat(False)
+        self.history.append(initial_hb)
     
     def update_and_generate(self, obstacles_gcj: List[Dict]) -> Optional[Dict]:
         """更新并生成新的心跳包"""
@@ -459,35 +466,44 @@ class HeartbeatSimulator:
                 logger.info("飞行任务完成")
             return None
         
+        # 控制更新频率（每秒更新5次，即0.2秒一次）
+        current_time = time.time()
+        if self.last_update_time and (current_time - self.last_update_time) < 0.2:
+            return None
+        self.last_update_time = current_time
+        
         start = self.path[self.path_index]
         end = self.path[self.path_index + 1]
         segment_distance = distance(start, end)
         
-        # 基础速度5m/s，更真实
-        base_speed = 5
+        # 基础速度2m/s，更真实，避免飞太快
+        base_speed = 2.0
         speed_m_per_s = base_speed * (self.speed / 100)
-        move_distance = speed_m_per_s * 0.2
+        move_distance = speed_m_per_s * 0.2  # 0.2秒移动距离
         
         self.distance_traveled += move_distance
         
         if self.total_distance > 0:
-            self.progress = self.distance_traveled / self.total_distance
-            self.progress = min(1.0, self.progress)
+            self.progress = min(1.0, self.distance_traveled / self.total_distance)
         
-        if self.distance_traveled >= segment_distance:
+        # 检查是否到达当前路径段终点
+        if self.distance_traveled >= segment_distance and segment_distance > 0:
             self.path_index += 1
             if self.path_index < len(self.path):
                 self.current_pos = self.path[self.path_index].copy()
                 self.distance_traveled = 0
+                logger.info(f"到达航点 {self.path_index}/{len(self.path)-1}")
             else:
                 self.simulating = False
                 logger.info("到达目的地")
                 return self._generate_heartbeat(True)
         else:
-            t = self.distance_traveled / segment_distance if segment_distance > 0 else 0
-            lng = start[0] + (end[0] - start[0]) * t
-            lat = start[1] + (end[1] - start[1]) * t
-            self.current_pos = [lng, lat]
+            # 计算当前位置
+            if segment_distance > 0:
+                t = self.distance_traveled / segment_distance
+                lng = start[0] + (end[0] - start[0]) * t
+                lat = start[1] + (end[1] - start[1]) * t
+                self.current_pos = [lng, lat]
         
         # 安全检查
         safe, min_dist, danger = check_safety_radius(
@@ -503,6 +519,11 @@ class HeartbeatSimulator:
         """生成心跳包数据"""
         flight_time = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
         
+        # 计算剩余距离
+        remaining_distance = 0
+        if self.total_distance > 0:
+            remaining_distance = max(0, self.total_distance - self.distance_traveled) * 111000
+        
         heartbeat = {
             'timestamp': datetime.now().strftime("%H:%M:%S"),
             'flight_time': flight_time,
@@ -511,12 +532,16 @@ class HeartbeatSimulator:
             'altitude': self.flight_altitude,
             'voltage': round(22.2 + random.uniform(-0.5, 0.5), 1),
             'satellites': random.randint(8, 14),
-            'speed': round(5 * (self.speed / 100), 1),
-            'progress': self.progress if self.total_distance > 0 else 0,
+            'speed': round(2.0 * (self.speed / 100), 1),  # 实际速度 m/s
+            'progress': self.progress,
             'arrived': arrived,
             'safety_violation': self.safety_violation,
-            'remaining_distance': max(0, self.total_distance - self.distance_traveled) * 111000
+            'remaining_distance': remaining_distance,
+            'current_waypoint': self.path_index,
+            'total_waypoints': len(self.path) - 1
         }
+        
+        # 保留最近100条记录
         self.history.insert(0, heartbeat)
         if len(self.history) > 100:
             self.history.pop()
@@ -525,6 +550,22 @@ class HeartbeatSimulator:
         self.flight_log.append(heartbeat)
         
         return heartbeat
+    
+    def get_flight_status(self) -> Dict:
+        """获取当前飞行状态"""
+        if not self.simulating:
+            return {'status': 'stopped', 'message': '无人机已停止'}
+        
+        if self.path_index >= len(self.path) - 1:
+            return {'status': 'completed', 'message': '飞行已完成'}
+        
+        return {
+            'status': 'flying',
+            'progress': self.progress,
+            'current_waypoint': self.path_index,
+            'total_waypoints': len(self.path) - 1,
+            'speed': 2.0 * (self.speed / 100)
+        }
     
     def export_flight_data(self) -> pd.DataFrame:
         """导出飞行数据为DataFrame"""
@@ -653,15 +694,28 @@ def main():
         transform: translateY(-2px);
         box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     }
-    .css-1d391kg {
-        padding-top: 1rem;
-    }
-    .warning-text {
-        color: #ff4444;
+    .flight-status-flying {
+        background-color: #4CAF50;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        text-align: center;
         font-weight: bold;
     }
-    .success-text {
-        color: #00ff00;
+    .flight-status-stopped {
+        background-color: #f44336;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        text-align: center;
+        font-weight: bold;
+    }
+    .flight-status-completed {
+        background-color: #2196F3;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        text-align: center;
         font-weight: bold;
     }
     </style>
@@ -698,6 +752,10 @@ def main():
         st.session_state.safety_radius = DEFAULT_SAFETY_RADIUS_METERS
     if "auto_backup" not in st.session_state:
         st.session_state.auto_backup = True
+    if "flight_started" not in st.session_state:
+        st.session_state.flight_started = False
+    if "flight_start_time" not in st.session_state:
+        st.session_state.flight_start_time = None
     
     # 侧边栏
     st.sidebar.title("🎛️ 导航菜单")
@@ -708,7 +766,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("⚡ 无人机速度设置")
     drone_speed = st.sidebar.slider("飞行速度系数", min_value=10, max_value=100, value=50, step=5,
-                                    help="速度系数越高，飞行越快")
+                                    help="速度系数越高，飞行越快（基础速度2m/s）")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("✈️ 无人机飞行高度")
@@ -734,7 +792,7 @@ def main():
     # 重新规划路径（当飞行高度改变时）
     if flight_alt != st.session_state.last_flight_altitude:
         st.session_state.last_flight_altitude = flight_alt
-        if st.session_state.planned_path is not None:
+        if st.session_state.planned_path is not None and not st.session_state.simulation_running:
             st.session_state.planned_path = create_avoidance_path(
                 st.session_state.points_gcj['A'],
                 st.session_state.points_gcj['B'],
@@ -774,14 +832,15 @@ def main():
     with col_refresh1:
         if st.button("🔄 刷新数据", use_container_width=True):
             st.session_state.obstacles_gcj = load_obstacles()
-            st.session_state.planned_path = create_avoidance_path(
-                st.session_state.points_gcj['A'],
-                st.session_state.points_gcj['B'],
-                st.session_state.obstacles_gcj,
-                flight_alt,
-                st.session_state.current_direction,
-                safety_radius
-            )
+            if not st.session_state.simulation_running:
+                st.session_state.planned_path = create_avoidance_path(
+                    st.session_state.points_gcj['A'],
+                    st.session_state.points_gcj['B'],
+                    st.session_state.obstacles_gcj,
+                    flight_alt,
+                    st.session_state.current_direction,
+                    safety_radius
+                )
             st.success("数据已刷新")
             st.rerun()
     
@@ -824,14 +883,15 @@ def main():
                     try:
                         validate_coordinates(a_lng, a_lat)
                         st.session_state.points_gcj['A'] = [a_lng, a_lat]
-                        st.session_state.planned_path = create_avoidance_path(
-                            st.session_state.points_gcj['A'],
-                            st.session_state.points_gcj['B'],
-                            st.session_state.obstacles_gcj,
-                            flight_alt,
-                            st.session_state.current_direction,
-                            safety_radius
-                        )
+                        if not st.session_state.simulation_running:
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                st.session_state.current_direction,
+                                safety_radius
+                            )
                         st.success("起点已更新")
                         st.rerun()
                     except ValueError as e:
@@ -850,14 +910,15 @@ def main():
                     try:
                         validate_coordinates(b_lng, b_lat)
                         st.session_state.points_gcj['B'] = [b_lng, b_lat]
-                        st.session_state.planned_path = create_avoidance_path(
-                            st.session_state.points_gcj['A'],
-                            st.session_state.points_gcj['B'],
-                            st.session_state.obstacles_gcj,
-                            flight_alt,
-                            st.session_state.current_direction,
-                            safety_radius
-                        )
+                        if not st.session_state.simulation_running:
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                st.session_state.current_direction,
+                                safety_radius
+                            )
                         st.success("终点已更新")
                         st.rerun()
                     except ValueError as e:
@@ -869,65 +930,92 @@ def main():
                 with col_dir1:
                     if st.button("🔄 最佳航线", use_container_width=True, 
                                 type="primary" if st.session_state.current_direction == "最佳航线" else "secondary"):
-                        st.session_state.current_direction = "最佳航线"
-                        st.session_state.planned_path = create_avoidance_path(
-                            st.session_state.points_gcj['A'],
-                            st.session_state.points_gcj['B'],
-                            st.session_state.obstacles_gcj,
-                            flight_alt,
-                            "最佳航线",
-                            safety_radius
-                        )
-                        st.success("已切换到最佳航线模式")
-                        st.rerun()
+                        if not st.session_state.simulation_running:
+                            st.session_state.current_direction = "最佳航线"
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                "最佳航线",
+                                safety_radius
+                            )
+                            st.success("已切换到最佳航线模式")
+                            st.rerun()
+                        else:
+                            st.warning("请先停止飞行再切换策略")
                 
                 with col_dir2:
                     if st.button("⬅️ 向左绕行", use_container_width=True,
                                 type="primary" if st.session_state.current_direction == "向左绕行" else "secondary"):
-                        st.session_state.current_direction = "向左绕行"
-                        st.session_state.planned_path = create_avoidance_path(
-                            st.session_state.points_gcj['A'],
-                            st.session_state.points_gcj['B'],
-                            st.session_state.obstacles_gcj,
-                            flight_alt,
-                            "向左绕行",
-                            safety_radius
-                        )
-                        st.success("已切换到向左绕行模式（3个绕行点）")
-                        st.rerun()
+                        if not st.session_state.simulation_running:
+                            st.session_state.current_direction = "向左绕行"
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                "向左绕行",
+                                safety_radius
+                            )
+                            st.success("已切换到向左绕行模式（3个绕行点）")
+                            st.rerun()
+                        else:
+                            st.warning("请先停止飞行再切换策略")
                 
                 with col_dir3:
                     if st.button("➡️ 向右绕行", use_container_width=True,
                                 type="primary" if st.session_state.current_direction == "向右绕行" else "secondary"):
-                        st.session_state.current_direction = "向右绕行"
+                        if not st.session_state.simulation_running:
+                            st.session_state.current_direction = "向右绕行"
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                "向右绕行",
+                                safety_radius
+                            )
+                            st.success("已切换到向右绕行模式（1个绕行点）")
+                            st.rerun()
+                        else:
+                            st.warning("请先停止飞行再切换策略")
+                
+                st.info(f"📌 当前绕行策略: **{st.session_state.current_direction}**")
+                
+                if st.button("🔄 重新规划路径", use_container_width=True):
+                    if not st.session_state.simulation_running:
                         st.session_state.planned_path = create_avoidance_path(
                             st.session_state.points_gcj['A'],
                             st.session_state.points_gcj['B'],
                             st.session_state.obstacles_gcj,
                             flight_alt,
-                            "向右绕行",
+                            st.session_state.current_direction,
                             safety_radius
                         )
-                        st.success("已切换到向右绕行模式（1个绕行点）")
+                        if st.session_state.planned_path:
+                            waypoint_count = len(st.session_state.planned_path) - 2
+                            st.success(f"✅ 已规划避障路径，{waypoint_count}个绕行点")
                         st.rerun()
-                
-                st.info(f"📌 当前绕行策略: **{st.session_state.current_direction}**")
-                
-                if st.button("🔄 重新规划路径", use_container_width=True):
-                    st.session_state.planned_path = create_avoidance_path(
-                        st.session_state.points_gcj['A'],
-                        st.session_state.points_gcj['B'],
-                        st.session_state.obstacles_gcj,
-                        flight_alt,
-                        st.session_state.current_direction,
-                        safety_radius
-                    )
-                    if st.session_state.planned_path:
-                        waypoint_count = len(st.session_state.planned_path) - 2
-                        st.success(f"✅ 已规划避障路径，{waypoint_count}个绕行点")
-                    st.rerun()
+                    else:
+                        st.warning("请先停止飞行再重新规划")
             
             with st.expander("✈️ 飞行控制", expanded=True):
+                # 显示飞行状态
+                if st.session_state.simulation_running:
+                    status = st.session_state.heartbeat_sim.get_flight_status()
+                    if status['status'] == 'flying':
+                        st.markdown('<div class="flight-status-flying">🚁 飞行状态: 飞行中</div>', unsafe_allow_html=True)
+                        st.progress(status['progress'], text=f"✈️ 飞行进度: {status['progress']*100:.1f}%")
+                        st.write(f"📍 当前航点: {status['current_waypoint']}/{status['total_waypoints']}")
+                        st.write(f"💨 当前速度: {status['speed']:.1f} m/s")
+                    elif status['status'] == 'completed':
+                        st.markdown('<div class="flight-status-completed">✅ 飞行状态: 已完成</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="flight-status-stopped">⏹️ 飞行状态: 已停止</div>', unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
                 # 显示参数
                 col_met1, col_met2, col_met3 = st.columns(3)
                 with col_met1:
@@ -946,28 +1034,50 @@ def main():
                     for i in range(len(st.session_state.planned_path)-1):
                         total_dist += distance(st.session_state.planned_path[i], 
                                               st.session_state.planned_path[i+1]) * 111000
+                    estimated_time = total_dist / (2.0 * drone_speed / 100)  # 基础速度2m/s
                     st.caption(f"📏 规划路径总长: {total_dist:.0f} 米")
+                    st.caption(f"⏱️ 预计飞行时间: {estimated_time:.0f} 秒")
+                
+                st.markdown("---")
                 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
                     if st.button("▶️ 开始飞行", use_container_width=True, type="primary"):
-                        if st.session_state.points_gcj['A'] and st.session_state.points_gcj['B']:
-                            path = st.session_state.planned_path or [st.session_state.points_gcj['A'], 
-                                                                    st.session_state.points_gcj['B']]
-                            st.session_state.heartbeat_sim.set_path(path, flight_alt, drone_speed, safety_radius)
-                            st.session_state.simulation_running = True
-                            st.session_state.flight_history = []
-                            waypoint_count = len(path) - 2
-                            st.success(f"🚁 飞行已开始！{'路径中有' + str(waypoint_count) + '个绕行点' if waypoint_count > 0 else '直线飞行'}")
-                            st.rerun()
+                        if not st.session_state.simulation_running:
+                            if st.session_state.points_gcj['A'] and st.session_state.points_gcj['B']:
+                                path = st.session_state.planned_path or [st.session_state.points_gcj['A'], 
+                                                                        st.session_state.points_gcj['B']]
+                                st.session_state.heartbeat_sim.set_path(path, flight_alt, drone_speed, safety_radius)
+                                st.session_state.simulation_running = True
+                                st.session_state.flight_history = []
+                                st.session_state.flight_started = True
+                                st.session_state.flight_start_time = datetime.now()
+                                waypoint_count = len(path) - 2
+                                
+                                # 显示起飞确认信息
+                                st.success(f"""
+                                🚁 **无人机已起飞！**
+                                - 起点: ({path[0][0]:.6f}, {path[0][1]:.6f})
+                                - 终点: ({path[-1][0]:.6f}, {path[-1][1]:.6f})
+                                - 路径类型: {'直线飞行' if waypoint_count == 0 else f'包含{waypoint_count}个绕行点'}
+                                - 飞行高度: {flight_alt}米
+                                - 安全半径: {safety_radius}米
+                                """)
+                                st.rerun()
+                            else:
+                                st.error("❌ 请先设置起点和终点！")
                         else:
-                            st.error("请先设置起点和终点")
+                            st.warning("⚠️ 无人机正在飞行中，请先停止再开始新任务")
                 
                 with col_btn2:
                     if st.button("⏹️ 停止飞行", use_container_width=True):
-                        st.session_state.simulation_running = False
-                        st.session_state.heartbeat_sim.simulating = False
-                        st.info("飞行已停止")
+                        if st.session_state.simulation_running:
+                            st.session_state.simulation_running = False
+                            st.session_state.heartbeat_sim.simulating = False
+                            st.success("🛑 飞行已停止")
+                            st.rerun()
+                        else:
+                            st.info("无人机未在飞行中")
             
             # 坐标信息
             st.markdown("### 📍 当前坐标")
@@ -983,7 +1093,8 @@ def main():
             st.caption("🟣 向左绕行（3个绕行点）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
             
-            flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20]]
+            flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20] 
+                          if 'lng' in hb and 'lat' in hb]
             center = st.session_state.points_gcj['A'] or SCHOOL_CENTER_GCJ
             
             if st.session_state.planned_path is None:
@@ -996,7 +1107,7 @@ def main():
                     safety_radius
                 )
             
-            drone_pos = st.session_state.heartbeat_sim.current_pos if st.session_state.heartbeat_sim.simulating else None
+            drone_pos = st.session_state.heartbeat_sim.current_pos if st.session_state.simulation_running else None
             
             m = create_planning_map(center, st.session_state.points_gcj, 
                                    st.session_state.obstacles_gcj, flight_trail, 
@@ -1038,14 +1149,15 @@ def main():
                             "height": new_height
                         })
                         save_obstacles(st.session_state.obstacles_gcj)
-                        st.session_state.planned_path = create_avoidance_path(
-                            st.session_state.points_gcj['A'],
-                            st.session_state.points_gcj['B'],
-                            st.session_state.obstacles_gcj,
-                            flight_alt,
-                            st.session_state.current_direction,
-                            safety_radius
-                        )
+                        if not st.session_state.simulation_running:
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                st.session_state.current_direction,
+                                safety_radius
+                            )
                         st.session_state.pending_obstacle = None
                         st.success(f"✅ 已添加 {new_name}，高度 {new_height} 米")
                         st.rerun()
@@ -1073,6 +1185,7 @@ def main():
                         if not st.session_state.heartbeat_sim.simulating:
                             st.session_state.simulation_running = False
                             st.success("🏁 无人机已安全到达目的地！")
+                            st.balloons()  # 到达时显示庆祝效果
                         st.rerun()
                 except Exception as e:
                     st.error(f"更新心跳时出错: {e}")
@@ -1097,6 +1210,10 @@ def main():
             col7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
             col8.metric("⚡ 速度系数", f"{drone_speed}%")
             col9.metric("📏 剩余距离", f"{latest.get('remaining_distance', 0):.0f} m")
+            
+            # 航点信息
+            if 'current_waypoint' in latest and 'total_waypoints' in latest:
+                st.info(f"📍 航点进度: {latest['current_waypoint']}/{latest['total_waypoints']}")
             
             # 安全警告
             if latest.get('safety_violation', False):
@@ -1198,7 +1315,7 @@ def main():
             st.subheader("📋 历史心跳记录")
             history_df = pd.DataFrame(st.session_state.heartbeat_sim.history[:10])
             # 选择要显示的列
-            display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'voltage', 'satellites']
+            display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'voltage', 'satellites', 'current_waypoint', 'total_waypoints']
             display_cols = [col for col in display_cols if col in history_df.columns]
             st.dataframe(history_df[display_cols], use_container_width=True)
             
@@ -1211,7 +1328,19 @@ def main():
         
         else:
             st.info("⏳ 等待心跳数据... 请在「航线规划」页面点击「开始飞行」")
-            st.image("https://via.placeholder.com/800x400?text=等待飞行开始", use_column_width=True)
+            
+            # 显示提示信息
+            st.markdown("""
+            ### 🚁 如何开始飞行？
+            
+            1. 在左侧边栏设置飞行参数（高度、速度等）
+            2. 切换到「航线规划」页面
+            3. 确认起点(A点)和终点(B点)已设置
+            4. 选择绕行策略（最佳航线/向左绕行/向右绕行）
+            5. 点击「开始飞行」按钮
+            
+            💡 **提示**: 飞行开始后会自动切换到监控页面查看实时数据
+            """)
     
     # ==================== 障碍物管理页面 ====================
     elif page == "🚧 障碍物管理":
@@ -1230,14 +1359,15 @@ def main():
                 loaded = load_obstacles()
                 if loaded:
                     st.session_state.obstacles_gcj = loaded
-                    st.session_state.planned_path = create_avoidance_path(
-                        st.session_state.points_gcj['A'],
-                        st.session_state.points_gcj['B'],
-                        st.session_state.obstacles_gcj,
-                        flight_alt,
-                        st.session_state.current_direction,
-                        safety_radius
-                    )
+                    if not st.session_state.simulation_running:
+                        st.session_state.planned_path = create_avoidance_path(
+                            st.session_state.points_gcj['A'],
+                            st.session_state.points_gcj['B'],
+                            st.session_state.obstacles_gcj,
+                            flight_alt,
+                            st.session_state.current_direction,
+                            safety_radius
+                        )
                     st.success(f"已加载 {len(loaded)} 个障碍物")
                     st.rerun()
                 else:
@@ -1247,7 +1377,7 @@ def main():
                 'obstacles': st.session_state.obstacles_gcj, 
                 'count': len(st.session_state.obstacles_gcj), 
                 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                'version': 'v27.1'
+                'version': 'v27.2'
             }
             st.download_button(
                 label="📥 下载配置", 
@@ -1265,6 +1395,15 @@ def main():
                     with open(f"{BACKUP_DIR}/{latest_backup}", 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         st.session_state.obstacles_gcj = data.get('obstacles', [])
+                        if not st.session_state.simulation_running:
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                st.session_state.current_direction,
+                                safety_radius
+                            )
                         st.success(f"已从备份恢复: {latest_backup}")
                         st.rerun()
                 else:
@@ -1292,28 +1431,30 @@ def main():
                                 obs['height'] = new_h
                                 if st.session_state.auto_backup:
                                     save_obstacles(st.session_state.obstacles_gcj)
-                                st.session_state.planned_path = create_avoidance_path(
-                                    st.session_state.points_gcj['A'],
-                                    st.session_state.points_gcj['B'],
-                                    st.session_state.obstacles_gcj,
-                                    flight_alt,
-                                    st.session_state.current_direction,
-                                    safety_radius
-                                )
+                                if not st.session_state.simulation_running:
+                                    st.session_state.planned_path = create_avoidance_path(
+                                        st.session_state.points_gcj['A'],
+                                        st.session_state.points_gcj['B'],
+                                        st.session_state.obstacles_gcj,
+                                        flight_alt,
+                                        st.session_state.current_direction,
+                                        safety_radius
+                                    )
                                 st.rerun()
                         with col_del:
                             if st.button("🗑️", key=f"del_{i}"):
                                 st.session_state.obstacles_gcj.pop(i)
                                 if st.session_state.auto_backup:
                                     save_obstacles(st.session_state.obstacles_gcj)
-                                st.session_state.planned_path = create_avoidance_path(
-                                    st.session_state.points_gcj['A'],
-                                    st.session_state.points_gcj['B'],
-                                    st.session_state.obstacles_gcj,
-                                    flight_alt,
-                                    st.session_state.current_direction,
-                                    safety_radius
-                                )
+                                if not st.session_state.simulation_running:
+                                    st.session_state.planned_path = create_avoidance_path(
+                                        st.session_state.points_gcj['A'],
+                                        st.session_state.points_gcj['B'],
+                                        st.session_state.obstacles_gcj,
+                                        flight_alt,
+                                        st.session_state.current_direction,
+                                        safety_radius
+                                    )
                                 st.rerun()
                         st.markdown("---")
             else:
@@ -1324,14 +1465,15 @@ def main():
                     backup_config()
                 st.session_state.obstacles_gcj = []
                 save_obstacles([])
-                st.session_state.planned_path = create_avoidance_path(
-                    st.session_state.points_gcj['A'],
-                    st.session_state.points_gcj['B'],
-                    [],
-                    flight_alt,
-                    st.session_state.current_direction,
-                    safety_radius
-                )
+                if not st.session_state.simulation_running:
+                    st.session_state.planned_path = create_avoidance_path(
+                        st.session_state.points_gcj['A'],
+                        st.session_state.points_gcj['B'],
+                        [],
+                        flight_alt,
+                        st.session_state.current_direction,
+                        safety_radius
+                    )
                 st.success("已清除所有障碍物")
                 st.rerun()
         
@@ -1358,6 +1500,16 @@ def main():
             folium_static(obs_map, width=700, height=500)
             
             st.caption("🔴 红色: 需要避让（高于飞行高度）| 🟠 橙色: 安全（低于飞行高度）")
+    
+    # 自动切换到飞行监控（如果飞行刚启动）
+    if st.session_state.get('flight_started', False) and page != "📡 飞行监控":
+        if st.session_state.flight_started:
+            st.session_state.flight_started = False
+            st.info("🚁 飞行已开始，建议切换到「飞行监控」页面查看实时数据")
+            # 可选: 自动跳转（需要用户点击）
+            if st.button("📡 前往飞行监控页面"):
+                st.session_state.page = "📡 飞行监控"
+                st.rerun()
 
 if __name__ == "__main__":
     main()
