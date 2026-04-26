@@ -444,31 +444,53 @@ def backup_config():
 
 def load_obstacles() -> List[Dict]:
     """加载障碍物配置"""
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                obstacles = data.get('obstacles', [])
-                # 验证每个障碍物的数据完整性
-                valid_obstacles = []
-                for obs in obstacles:
-                    if 'height' not in obs:
-                        obs['height'] = 30
-                    if 'name' not in obs:
-                        obs['name'] = '未命名障碍物'
-                    if 'polygon' not in obs or len(obs['polygon']) < 3:
-                        logger.warning(f"障碍物 {obs.get('name')} 多边形无效，已跳过")
-                        continue
-                    if not validate_polygon(obs['polygon']):
-                        logger.warning(f"障碍物 {obs.get('name')} 多边形自相交，已跳过")
-                        continue
-                    valid_obstacles.append(obs)
-                logger.info(f"成功加载 {len(valid_obstacles)} 个障碍物")
-                return valid_obstacles
-        except Exception as e:
-            logger.error(f"加载配置文件失败: {e}")
-            return []
-    return []
+    if not os.path.exists(CONFIG_FILE):
+        logger.warning(f"配置文件 {CONFIG_FILE} 不存在")
+        return []
+    
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            obstacles = data.get('obstacles', [])
+            
+            if not obstacles:
+                logger.info("配置文件中没有障碍物数据")
+                return []
+            
+            # 验证每个障碍物的数据完整性
+            valid_obstacles = []
+            for i, obs in enumerate(obstacles):
+                # 检查必要字段
+                if 'height' not in obs:
+                    obs['height'] = 30
+                    logger.warning(f"障碍物 {i+1} 缺少高度字段，使用默认值30m")
+                
+                if 'name' not in obs:
+                    obs['name'] = f'未命名障碍物{i+1}'
+                    logger.warning(f"障碍物 {i+1} 缺少名称，使用默认名称")
+                
+                if 'polygon' not in obs or len(obs['polygon']) < 3:
+                    logger.warning(f"障碍物 {obs.get('name')} 多边形无效（顶点数不足），已跳过")
+                    continue
+                
+                # 验证多边形
+                if not validate_polygon(obs['polygon']):
+                    logger.warning(f"障碍物 {obs.get('name')} 多边形自相交，已跳过")
+                    continue
+                
+                valid_obstacles.append(obs)
+            
+            logger.info(f"成功加载 {len(valid_obstacles)} 个有效障碍物（共{len(obstacles)}个）")
+            return valid_obstacles
+            
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON解析失败: {e}")
+        st.error(f"配置文件格式错误: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}")
+        st.error(f"加载失败: {e}")
+        return []
 
 def save_obstacles(obstacles: List[Dict]):
     """保存障碍物配置"""
@@ -1323,61 +1345,128 @@ def main():
     elif page == "🚧 障碍物管理":
         st.header("🚧 障碍物管理")
         
+        # 显示配置文件状态
+        col_info1, col_info2 = st.columns(2)
+        with col_info1:
+            if os.path.exists(CONFIG_FILE):
+                file_size = os.path.getsize(CONFIG_FILE)
+                mod_time = datetime.fromtimestamp(os.path.getmtime(CONFIG_FILE)).strftime("%Y-%m-%d %H:%M:%S")
+                st.info(f"📁 配置文件: {CONFIG_FILE}\n📏 大小: {file_size} bytes\n🕐 修改时间: {mod_time}")
+            else:
+                st.warning(f"⚠️ 配置文件 {CONFIG_FILE} 不存在，请先保存数据")
+        
+        with col_info2:
+            backup_count = len([f for f in os.listdir(BACKUP_DIR) if f.startswith(CONFIG_FILE)])
+            st.info(f"💾 备份文件数量: {backup_count} 个\n📂 备份目录: {BACKUP_DIR}")
+        
         st.subheader("💾 数据管理")
         st.info(f"当前共 **{len(st.session_state.obstacles_gcj)}** 个障碍物 | 🛡️ 安全半径: {safety_radius} 米")
         
         col_save1, col_save2, col_save3, col_save4 = st.columns(4)
         with col_save1:
             if st.button("💾 保存到JSON", use_container_width=True, type="primary"):
-                save_obstacles(st.session_state.obstacles_gcj)
-                st.success(f"已保存到 {CONFIG_FILE}")
+                try:
+                    save_obstacles(st.session_state.obstacles_gcj)
+                    st.success(f"✅ 已保存到 {CONFIG_FILE}")
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"保存失败: {e}")
+        
         with col_save2:
             if st.button("📂 加载JSON", use_container_width=True):
-                loaded = load_obstacles()
-                if loaded:
-                    st.session_state.obstacles_gcj = loaded
-                    st.session_state.planned_path = create_avoidance_path(
-                        st.session_state.points_gcj['A'],
-                        st.session_state.points_gcj['B'],
-                        st.session_state.obstacles_gcj,
-                        flight_alt,
-                        st.session_state.current_direction,
-                        safety_radius
-                    )
-                    st.success(f"已加载 {len(loaded)} 个障碍物")
-                    st.rerun()
-                else:
-                    st.warning("无配置文件或文件为空")
+                try:
+                    # 检查文件是否存在
+                    if not os.path.exists(CONFIG_FILE):
+                        st.warning(f"配置文件 {CONFIG_FILE} 不存在，请先保存数据")
+                    else:
+                        # 加载障碍物
+                        loaded_obstacles = load_obstacles()
+                        
+                        if loaded_obstacles:
+                            # 更新session state
+                            st.session_state.obstacles_gcj = loaded_obstacles
+                            
+                            # 重新规划路径
+                            st.session_state.planned_path = create_avoidance_path(
+                                st.session_state.points_gcj['A'],
+                                st.session_state.points_gcj['B'],
+                                st.session_state.obstacles_gcj,
+                                flight_alt,
+                                st.session_state.current_direction,
+                                safety_radius
+                            )
+                            
+                            # 显示成功消息
+                            st.success(f"✅ 成功加载 {len(loaded_obstacles)} 个障碍物")
+                            
+                            # 显示加载的障碍物详情
+                            with st.expander("查看加载的障碍物详情"):
+                                for i, obs in enumerate(loaded_obstacles):
+                                    st.write(f"{i+1}. {obs.get('name', '未知')} - 高度: {obs.get('height', 30)}m - 顶点数: {len(obs.get('polygon', []))}")
+                            
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ 配置文件为空或格式错误，未加载任何障碍物")
+                            
+                except json.JSONDecodeError as e:
+                    st.error(f"配置文件格式错误: {e}")
+                except Exception as e:
+                    st.error(f"加载失败: {e}")
+                    logger.error(f"加载障碍物错误: {e}")
+        
         with col_save3:
-            config_data = {
-                'obstacles': st.session_state.obstacles_gcj, 
-                'count': len(st.session_state.obstacles_gcj), 
-                'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                'version': 'v27.2'
-            }
-            st.download_button(
-                label="📥 下载配置", 
-                data=json.dumps(config_data, ensure_ascii=False, indent=2), 
-                file_name=CONFIG_FILE, 
-                mime="application/json", 
-                use_container_width=True
-            )
+            if st.session_state.obstacles_gcj:
+                config_data = {
+                    'obstacles': st.session_state.obstacles_gcj, 
+                    'count': len(st.session_state.obstacles_gcj), 
+                    'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                    'version': 'v27.2'
+                }
+                st.download_button(
+                    label="📥 下载配置", 
+                    data=json.dumps(config_data, ensure_ascii=False, indent=2), 
+                    file_name=CONFIG_FILE, 
+                    mime="application/json", 
+                    use_container_width=True
+                )
+            else:
+                st.button("📥 下载配置", use_container_width=True, disabled=True, help="暂无障碍物可导出")
+        
         with col_save4:
             if st.button("🔄 恢复上次备份", use_container_width=True):
-                # 查找最新的备份文件
-                backup_files = [f for f in os.listdir(BACKUP_DIR) if f.startswith(CONFIG_FILE)]
-                if backup_files:
-                    latest_backup = max(backup_files)
-                    try:
+                try:
+                    # 查找最新的备份文件
+                    backup_files = [f for f in os.listdir(BACKUP_DIR) if f.startswith(CONFIG_FILE)]
+                    if backup_files:
+                        # 按创建时间排序，获取最新的
+                        backup_files.sort(key=lambda x: os.path.getctime(os.path.join(BACKUP_DIR, x)), reverse=True)
+                        latest_backup = backup_files[0]
+                        
                         with open(f"{BACKUP_DIR}/{latest_backup}", 'r', encoding='utf-8') as f:
                             data = json.load(f)
-                            st.session_state.obstacles_gcj = data.get('obstacles', [])
-                            st.success(f"已从备份恢复: {latest_backup}")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"恢复备份失败: {e}")
-                else:
-                    st.warning("没有找到备份文件")
+                            restored_obstacles = data.get('obstacles', [])
+                            
+                            if restored_obstacles:
+                                st.session_state.obstacles_gcj = restored_obstacles
+                                
+                                # 重新规划路径
+                                st.session_state.planned_path = create_avoidance_path(
+                                    st.session_state.points_gcj['A'],
+                                    st.session_state.points_gcj['B'],
+                                    st.session_state.obstacles_gcj,
+                                    flight_alt,
+                                    st.session_state.current_direction,
+                                    safety_radius
+                                )
+                                
+                                st.success(f"✅ 已从备份恢复: {latest_backup} (共 {len(restored_obstacles)} 个障碍物)")
+                                st.rerun()
+                            else:
+                                st.warning("备份文件中没有障碍物数据")
+                    else:
+                        st.info("没有找到备份文件")
+                except Exception as e:
+                    st.error(f"恢复备份失败: {e}")
         
         st.markdown("---")
         st.subheader("📝 障碍物列表")
