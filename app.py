@@ -412,7 +412,7 @@ def save_obstacles(obstacles: List[Dict]):
             'obstacles': obstacles,
             'count': len(obstacles),
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'version': 'v27.6'
+            'version': 'v27.7'
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -430,7 +430,7 @@ class HeartbeatSimulator:
         self.path_index = 0
         self.simulating = False
         self.flight_altitude = DEFAULT_FLIGHT_ALTITUDE
-        self.speed_percent = 50
+        self.speed_percent = 100  # 默认100%速度
         self.progress = 0.0
         self.total_distance_meters = 0.0
         self.distance_traveled_meters = 0.0
@@ -439,13 +439,11 @@ class HeartbeatSimulator:
         self.start_time = None
         self.flight_log = []
         self.last_update_time = None
-        # 基础速度设为 40 m/s，让500米距离在12.5秒完成（约13秒）
-        # 配合速度系数，默认50%即20 m/s，约25秒完成
-        # 用户可调节速度系数来控制快慢
-        self.base_speed_ms = 40.0  # 较快速度，让进度明显变化
+        # 基础速度设为 60 m/s，让600米距离在10秒完成（进度变化明显）
+        self.base_speed_ms = 60.0  # 约216 km/h
         
     def set_path(self, path: List[List[float]], altitude: float = 50, 
-                 speed_percent: float = 50, safety_radius: float = 5):
+                 speed_percent: float = 100, safety_radius: float = 5):
         """设置飞行路径"""
         self.path = path
         self.path_index = 0
@@ -806,24 +804,24 @@ def main():
     st.sidebar.subheader("⚡ 无人机速度设置")
     
     # 速度说明
-    st.sidebar.caption("💡 基础速度: 40 m/s | 默认50% = 20 m/s")
-    st.sidebar.caption("📊 500米距离约13-25秒完成（进度可见）")
+    st.sidebar.caption("💡 基础速度: 60 m/s (216 km/h)")
+    st.sidebar.caption("⚡ 默认100%速度，600米约10秒完成")
     
     drone_speed_percent = st.sidebar.slider(
         "速度系数", 
         min_value=10, 
         max_value=100, 
-        value=50, 
+        value=100,  # 默认100%
         step=10,
-        help="速度系数越高飞行越快，进度变化越明显"
+        help="100% = 60 m/s，600米约10秒完成"
     )
-    actual_speed = 40.0 * (drone_speed_percent / 100)
+    actual_speed = 60.0 * (drone_speed_percent / 100)
     st.sidebar.info(f"📊 实际速度: **{actual_speed:.1f} m/s** ({actual_speed*3.6:.0f} km/h)")
     
-    # 计算预计时间（基于默认起点终点距离约500米）
+    # 计算预计时间（基于默认起点终点距离）
     default_distance = distance_meters(DEFAULT_A_GCJ, DEFAULT_B_GCJ)
     est_time = default_distance / actual_speed if actual_speed > 0 else 0
-    st.sidebar.caption(f"⏱️ 预计飞行时间: {est_time:.0f} 秒 ({est_time/60:.1f} 分钟)")
+    st.sidebar.success(f"⏱️ 预计飞行时间: {est_time:.1f} 秒")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("✈️ 无人机飞行高度")
@@ -1066,10 +1064,10 @@ def main():
                         st.markdown('<div class="flight-status-flying">🚁 飞行状态: 飞行中</div>', unsafe_allow_html=True)
                         st.progress(status['progress'], text=f"✈️ 飞行进度: {status['progress_percent']:.1f}%")
                         st.write(f"📍 当前航点: {status['current_waypoint']}/{status['total_waypoints']}")
-                        st.write(f"💨 当前速度: {status['speed']:.1f} m/s")
+                        st.write(f"💨 当前速度: {status['speed']:.1f} m/s ({status['speed']*3.6:.0f} km/h)")
                         st.write(f"📏 已飞距离: {status['traveled_distance']:.0f} / {status['total_distance']:.0f} 米")
                         if status['remaining_time'] > 0:
-                            st.write(f"⏱️ 预计剩余时间: {status['remaining_time']:.0f} 秒")
+                            st.write(f"⏱️ 预计剩余时间: {status['remaining_time']:.1f} 秒")
                 else:
                     st.markdown('<div class="flight-status-stopped">⏹️ 飞行状态: 已停止</div>', unsafe_allow_html=True)
                 
@@ -1096,7 +1094,7 @@ def main():
                                                             st.session_state.planned_path[i+1])
                     estimated_time = total_dist_meters / actual_speed if actual_speed > 0 else 0
                     st.caption(f"📏 规划路径总长: {total_dist_meters:.0f} 米")
-                    st.caption(f"⏱️ 预计飞行时间: {estimated_time:.0f} 秒 ({estimated_time/60:.1f} 分钟)")
+                    st.caption(f"⏱️ 预计飞行时间: {estimated_time:.1f} 秒")
                 
                 st.markdown("---")
                 
@@ -1129,7 +1127,7 @@ def main():
                                 - 安全半径: {safety_radius}米
                                 - 飞行速度: {actual_speed:.1f} m/s ({actual_speed*3.6:.0f} km/h)
                                 - 总距离: {total_dist_meters:.0f}米
-                                - 预计时间: {est_time:.0f}秒 ({est_time/60:.1f}分钟)
+                                - 预计时间: {est_time:.1f}秒
                                 """)
                                 st.rerun()
                             else:
@@ -1160,7 +1158,7 @@ def main():
             st.subheader("🗺️ 规划地图")
             st.caption("🟣 向左绕行（3个绕行点）| 🟠 向右绕行（1个绕行点）| 🟢 最佳航线")
             st.caption("⚪ 白色圆点=绕行点 | 🔴 红色=需避让障碍物")
-            st.caption(f"⚡ 当前速度设置: {actual_speed:.1f} m/s | ⏱️ 约{est_time:.0f}秒完成")
+            st.caption(f"⚡ 当前速度: {actual_speed:.1f} m/s | ⏱️ 约{est_time:.1f}秒完成")
             
             flight_trail = [[hb['lng'], hb['lat']] for hb in st.session_state.heartbeat_sim.history[:20] 
                           if 'lng' in hb and 'lat' in hb]
@@ -1278,7 +1276,7 @@ def main():
             
             col7, col8, col9 = st.columns(3)
             col7.metric("💨 速度", f"{latest.get('speed', 0):.1f} m/s")
-            col8.metric("⚡ 速度系数", f"{latest.get('speed_percent', 50)}%")
+            col8.metric("⚡ 速度系数", f"{latest.get('speed_percent', 100)}%")
             col9.metric("📏 剩余距离", f"{latest.get('remaining_distance', 0):.0f} m")
             
             # 航点信息
@@ -1417,16 +1415,17 @@ def main():
             4. 选择绕行策略（最佳航线/向左绕行/向右绕行）
             5. 点击「开始飞行」按钮
             
-            💡 **速度设置**: 
-            - 基础速度: 40 m/s（约144 km/h，正常无人机速度）
-            - 默认50% = 20 m/s（约72 km/h）
-            - 500米距离约13-25秒完成，进度变化清晰可见
-            - 可通过速度系数调节快慢
+            💡 **速度设置（已优化）**: 
+            - 基础速度: **60 m/s** (216 km/h)
+            - **默认100%速度**，600米约10秒完成
+            - 进度变化明显，从0%到100%约10秒
+            - 可通过速度系数调节（10%-100%），最低6 m/s
             
             📊 **飞行特点**:
             - 进度基于实际飞行距离计算
-            - 每0.2秒更新一次位置
+            - 每0.2秒更新一次位置（5次/秒）
             - 实时显示剩余距离和预计时间
+            - 进度条会快速平滑增长
             """)
     
     # ==================== 障碍物管理页面 ====================
@@ -1464,7 +1463,7 @@ def main():
                 'obstacles': st.session_state.obstacles_gcj, 
                 'count': len(st.session_state.obstacles_gcj), 
                 'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-                'version': 'v27.6'
+                'version': 'v27.7'
             }
             st.download_button(
                 label="📥 下载配置", 
