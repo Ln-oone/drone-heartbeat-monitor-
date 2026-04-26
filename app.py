@@ -10,7 +10,7 @@ import os
 import shutil
 import logging
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import pandas as pd
 import numpy as np
 
@@ -52,6 +52,119 @@ GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&
 GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
 
 os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# ==================== 障碍物绘制工具类 ====================
+class ObstacleDrawingTool:
+    """障碍物绘制工具"""
+    
+    @staticmethod
+    def create_drawing_map(center_gcj: List[float], 
+                          existing_obstacles: List[Dict],
+                          flight_altitude: int = 50,
+                          map_type: str = "satellite") -> folium.Map:
+        """创建带有绘制工具的地图"""
+        
+        # 高德地图瓦片地址
+        GAODE_SATELLITE_URL = "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
+        GAODE_VECTOR_URL = "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
+        
+        if map_type == "satellite":
+            tiles = GAODE_SATELLITE_URL
+            attr = "高德卫星地图"
+        else:
+            tiles = GAODE_VECTOR_URL
+            attr = "高德矢量地图"
+        
+        m = folium.Map(location=[center_gcj[1], center_gcj[0]], 
+                      zoom_start=17, 
+                      tiles=tiles, 
+                      attr=attr)
+        
+        # 配置绘图工具
+        draw_options = {
+            'polygon': {
+                'allowIntersection': False,
+                'showArea': True,
+                'color': '#ff0000',
+                'fillColor': '#ff0000',
+                'fillOpacity': 0.4,
+                'weight': 3
+            },
+            'polyline': False,
+            'rectangle': False,
+            'circle': False,
+            'circlemarker': False,
+            'marker': False
+        }
+        
+        edit_options = {
+            'edit': True,
+            'remove': True
+        }
+        
+        draw = plugins.Draw(
+            export=True,
+            position='topleft',
+            draw_options=draw_options,
+            edit_options=edit_options
+        )
+        m.add_child(draw)
+        
+        # 绘制已存在的障碍物
+        for obs in existing_obstacles:
+            coords = obs.get('polygon', [])
+            height = obs.get('height', 30)
+            name = obs.get('name', '未命名')
+            
+            if coords and len(coords) >= 3:
+                # 根据高度决定颜色
+                color = "red" if height > flight_altitude else "orange"
+                
+                # 格式化显示信息
+                created_time = obs.get('created_time', 'N/A')
+                if created_time != 'N/A' and isinstance(created_time, datetime):
+                    created_time = created_time.strftime("%Y-%m-%d %H:%M:%S")
+                
+                popup_text = f"""
+                <div style="font-family: sans-serif;">
+                    <b>🏢 {name}</b><br>
+                    高度: {height} 米<br>
+                    ID: {obs.get('id', 'N/A')}<br>
+                    创建时间: {created_time}
+                </div>
+                """
+                
+                folium.Polygon(
+                    [[c[1], c[0]] for c in coords],
+                    color=color,
+                    weight=3,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.4,
+                    popup=folium.Popup(popup_text, max_width=300),
+                    tooltip=f"{name} ({height}m)"
+                ).add_to(m)
+        
+        return m
+    
+    @staticmethod
+    def process_drawing(drawing_data: Any) -> Optional[List[List[float]]]:
+        """处理用户绘制的多边形"""
+        if not drawing_data:
+            return None
+        
+        # 处理不同的数据格式
+        if isinstance(drawing_data, dict):
+            geometry = drawing_data.get('geometry')
+            if geometry and geometry.get('type') == 'Polygon':
+                coords = geometry.get('coordinates', [])
+                if coords and len(coords) > 0:
+                    # 提取多边形顶点
+                    polygon = [[p[0], p[1]] for p in coords[0]]
+                    if len(polygon) >= 3:
+                        return polygon
+        
+        return None
 
 # ==================== 坐标验证 ====================
 def validate_coordinates(lng: float, lat: float) -> bool:
@@ -558,6 +671,13 @@ def load_obstacles() -> List[Dict]:
 def save_obstacles(obstacles: List[Dict]):
     try:
         backup_config()
+        
+        # 为每个障碍物添加ID和创建时间（如果没有）
+        for i, obs in enumerate(obstacles):
+            if 'id' not in obs:
+                obs['id'] = f"obs_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i}"
+            if 'created_time' not in obs:
+                obs['created_time'] = datetime.now().isoformat()
         
         data = {
             'obstacles': obstacles,
@@ -1164,18 +1284,15 @@ def main():
                                    st.session_state.current_direction, safety_radius)
             output = st_folium(m, width=700, height=550, returned_objects=["last_active_drawing"])
             
+            # 使用新的障碍物绘制工具处理用户绘制
             if output and output.get("last_active_drawing"):
-                last = output["last_active_drawing"]
-                if last and last.get("geometry") and last["geometry"].get("type") == "Polygon":
-                    coords = last["geometry"].get("coordinates", [])
-                    if coords and len(coords) > 0:
-                        poly = [[p[0], p[1]] for p in coords[0]]
-                        if len(poly) >= 3 and st.session_state.pending_obstacle is None:
-                            if validate_polygon(poly):
-                                st.session_state.pending_obstacle = poly
-                                st.rerun()
-                            else:
-                                st.error("绘制的多边形自相交，请重新绘制")
+                polygon = ObstacleDrawingTool.process_drawing(output["last_active_drawing"])
+                if polygon and st.session_state.pending_obstacle is None:
+                    if validate_polygon(polygon):
+                        st.session_state.pending_obstacle = polygon
+                        st.rerun()
+                    else:
+                        st.error("绘制的多边形自相交，请重新绘制")
             
             if st.session_state.pending_obstacle is not None:
                 st.markdown("---")
@@ -1192,11 +1309,15 @@ def main():
                 col_ok, col_cancel = st.columns(2)
                 with col_ok:
                     if st.button("✅ 确认添加", use_container_width=True, type="primary"):
-                        st.session_state.obstacles_gcj.append({
+                        # 使用新的障碍物数据结构，包含ID和创建时间
+                        new_obstacle = {
                             "name": new_name,
                             "polygon": st.session_state.pending_obstacle,
-                            "height": new_height
-                        })
+                            "height": new_height,
+                            "id": f"obs_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(st.session_state.obstacles_gcj)}",
+                            "created_time": datetime.now().isoformat()
+                        }
+                        st.session_state.obstacles_gcj.append(new_obstacle)
                         if st.session_state.auto_backup:
                             save_obstacles(st.session_state.obstacles_gcj)
                         st.session_state.planned_path = create_avoidance_path(
@@ -1488,6 +1609,16 @@ def main():
                         col_h, col_edit, col_del = st.columns([1, 1.5, 0.8])
                         with col_h:
                             st.write(f"高度: {height}m")
+                            # 显示ID和创建时间
+                            obs_id = obs.get('id', 'N/A')
+                            created_time = obs.get('created_time', 'N/A')
+                            if created_time != 'N/A':
+                                try:
+                                    dt = datetime.fromisoformat(created_time)
+                                    created_time = dt.strftime("%Y-%m-%d %H:%M")
+                                except:
+                                    pass
+                            st.caption(f"ID: {obs_id[:16]}... | 创建: {created_time}")
                         with col_edit:
                             new_h = st.number_input("", value=height, min_value=1, max_value=200, 
                                                    step=5, key=f"edit_{i}", label_visibility="collapsed")
@@ -1540,27 +1671,18 @@ def main():
         
         with col_map:
             st.subheader("🗺️ 障碍物分布图")
-            tiles = GAODE_SATELLITE_URL if map_type == "satellite" else GAODE_VECTOR_URL
-            obs_map = folium.Map(location=[SCHOOL_CENTER_GCJ[1], SCHOOL_CENTER_GCJ[0]], 
-                                zoom_start=16, tiles=tiles, attr="高德地图")
-            
-            for obs in st.session_state.obstacles_gcj:
-                coords = obs.get('polygon', [])
-                height = obs.get('height', 30)
-                color = "red" if height > flight_alt else "orange"
-                if coords and len(coords) >= 3:
-                    folium.Polygon([[c[1], c[0]] for c in coords], 
-                                  color=color, weight=3, fill=True, fill_opacity=0.5, 
-                                  popup=f"{obs.get('name')}\n高度: {height}m").add_to(obs_map)
-            
-            folium.Marker([DEFAULT_A_GCJ[1], DEFAULT_A_GCJ[0]], 
-                         popup="起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(obs_map)
-            folium.Marker([DEFAULT_B_GCJ[1], DEFAULT_B_GCJ[0]], 
-                         popup="终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(obs_map)
-            
+            # 使用新的障碍物绘制工具创建地图
+            drawing_tool = ObstacleDrawingTool()
+            obs_map = drawing_tool.create_drawing_map(
+                SCHOOL_CENTER_GCJ,
+                st.session_state.obstacles_gcj,
+                flight_alt,
+                map_type
+            )
             folium_static(obs_map, width=700, height=500)
             
             st.caption("🔴 红色: 需要避让（高于飞行高度）| 🟠 橙色: 安全（低于飞行高度）")
+            st.caption("✏️ 使用左上角绘制工具绘制新障碍物 | 🖱️ 点击障碍物查看详细信息")
 
 if __name__ == "__main__":
     main()
