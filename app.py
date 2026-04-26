@@ -238,7 +238,7 @@ def load_obstacles() -> List[Dict]:
             return []
     return []
 
-def save_obstacles(obstacles: List[Dict]):
+def save_obstacles(obstacles: List[Dict]) -> bool:
     """保存障碍物配置"""
     try:
         backup_config()
@@ -253,6 +253,30 @@ def save_obstacles(obstacles: List[Dict]):
         return True
     except Exception as e:
         st.error(f"保存失败: {e}")
+        return False
+
+def get_latest_backup() -> Optional[str]:
+    """获取最新的备份文件"""
+    try:
+        backup_files = [f for f in os.listdir(config.BACKUP_DIR) 
+                       if f.startswith(config.CONFIG_FILE) and f.endswith('.bak')]
+        if backup_files:
+            backup_files.sort(reverse=True)
+            return os.path.join(config.BACKUP_DIR, backup_files[0])
+    except Exception as e:
+        st.error(f"获取备份文件失败: {e}")
+    return None
+
+def restore_from_backup(backup_path: str) -> bool:
+    """从备份文件恢复"""
+    try:
+        with open(backup_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            obstacles = data.get('obstacles', [])
+            save_obstacles(obstacles)
+            return True
+    except Exception as e:
+        st.error(f"恢复备份失败: {e}")
         return False
 
 # ==================== 绕行算法 ====================
@@ -1119,6 +1143,11 @@ def render_obstacle_management_page(flight_alt: float):
     """渲染障碍物管理页面"""
     st.header("🚧 障碍物管理")
     
+    # 数据管理区域
+    render_data_management_section()
+    
+    st.markdown("---")
+    
     # 统计信息
     display_obstacle_stats(flight_alt)
     
@@ -1140,6 +1169,86 @@ def render_obstacle_management_page(flight_alt: float):
     
     # 保存按钮
     render_save_buttons()
+
+def render_data_management_section():
+    """渲染数据管理区域"""
+    st.subheader("💾 数据管理")
+    
+    # 显示当前状态
+    col_status1, col_status2 = st.columns(2)
+    with col_status1:
+        st.info(f"📊 当前共 {len(st.session_state.obstacles_gcj)} 个障碍物 | 🛡️ 安全半径: {st.session_state.safety_radius}米")
+    
+    with col_status2:
+        # 显示最后保存时间
+        if os.path.exists(config.CONFIG_FILE):
+            try:
+                with open(config.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    save_time = data.get('save_time', '未知')
+                    st.info(f"💾 最后保存: {save_time}")
+            except:
+                st.info("💾 未找到保存记录")
+        else:
+            st.info("💾 暂无保存记录")
+    
+    # 数据操作按钮
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("💾 保存到JSON", use_container_width=True, type="primary"):
+            if save_obstacles(st.session_state.obstacles_gcj):
+                st.success(f"✅ 已保存 {len(st.session_state.obstacles_gcj)} 个障碍物到 {config.CONFIG_FILE}")
+                st.balloons()
+                time.sleep(0.5)
+                st.rerun()
+    
+    with col2:
+        if st.button("📂 加载JSON", use_container_width=True):
+            loaded = load_obstacles()
+            if loaded:
+                st.session_state.obstacles_gcj = loaded
+                update_path_after_obstacle_change(st.session_state.last_flight_altitude)
+                st.success(f"✅ 已加载 {len(loaded)} 个障碍物")
+                st.rerun()
+            else:
+                st.warning("⚠️ 未找到配置文件或文件损坏")
+    
+    with col3:
+        # 下载配置按钮
+        if st.session_state.obstacles_gcj:
+            config_data = {
+                'obstacles': st.session_state.obstacles_gcj,
+                'count': len(st.session_state.obstacles_gcj),
+                'export_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'version': 'v13.1',
+                'safety_radius': st.session_state.safety_radius
+            }
+            json_str = json.dumps(config_data, ensure_ascii=False, indent=2)
+            st.download_button(
+                label="📥 下载配置",
+                data=json_str,
+                file_name=f"obstacles_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        else:
+            st.button("📥 下载配置", use_container_width=True, disabled=True, help="暂无障碍物可导出")
+    
+    with col4:
+        # 恢复上次备份按钮
+        latest_backup = get_latest_backup()
+        if latest_backup:
+            if st.button("🔄 恢复上次备份", use_container_width=True):
+                if restore_from_backup(latest_backup):
+                    st.session_state.obstacles_gcj = load_obstacles()
+                    update_path_after_obstacle_change(st.session_state.last_flight_altitude)
+                    st.success(f"✅ 已从备份恢复 {len(st.session_state.obstacles_gcj)} 个障碍物")
+                    st.rerun()
+                else:
+                    st.error("❌ 恢复备份失败")
+        else:
+            st.button("🔄 恢复上次备份", use_container_width=True, disabled=True, help="暂无备份文件")
 
 def display_obstacle_stats(flight_alt: float):
     """显示障碍物统计信息"""
@@ -1182,10 +1291,10 @@ def render_batch_operations(flight_alt: float):
                 if st.session_state.auto_backup:
                     save_obstacles(st.session_state.obstacles_gcj)
                 update_path_after_obstacle_change(flight_alt)
-                st.success(f"已删除 {len(selected_indices)} 个障碍物")
+                st.success(f"✅ 已删除 {len(selected_indices)} 个障碍物")
                 st.rerun()
             else:
-                st.warning("请先选择要删除的障碍物")
+                st.warning("⚠️ 请先选择要删除的障碍物")
     
     with col_batch3:
         batch_height = st.number_input("批量高度(m)", min_value=1, max_value=200, 
@@ -1202,10 +1311,10 @@ def render_batch_operations(flight_alt: float):
                 if st.session_state.auto_backup:
                     save_obstacles(st.session_state.obstacles_gcj)
                 update_path_after_obstacle_change(flight_alt)
-                st.success(f"已为 {len(selected_indices)} 个障碍物设置高度为 {batch_height}m")
+                st.success(f"✅ 已为 {len(selected_indices)} 个障碍物设置高度为 {batch_height}m")
                 st.rerun()
             else:
-                st.warning("请先选择要修改的障碍物")
+                st.warning("⚠️ 请先选择要修改的障碍物")
     
     with col_batch5:
         if st.button("🏷️ 批量重命名", use_container_width=True):
@@ -1214,7 +1323,7 @@ def render_batch_operations(flight_alt: float):
             if selected_indices:
                 st.session_state.show_rename_dialog = True
             else:
-                st.warning("请先选择要重命名的障碍物")
+                st.warning("⚠️ 请先选择要重命名的障碍物")
     
     # 批量重命名对话框
     if st.session_state.get('show_rename_dialog', False):
@@ -1241,7 +1350,7 @@ def render_rename_dialog():
                 if st.session_state.auto_backup:
                     save_obstacles(st.session_state.obstacles_gcj)
                 st.session_state.show_rename_dialog = False
-                st.success(f"已重命名 {len(selected_indices)} 个障碍物")
+                st.success(f"✅ 已重命名 {len(selected_indices)} 个障碍物")
                 st.rerun()
         with col_cancel_r:
             if st.button("取消"):
@@ -1264,7 +1373,7 @@ def render_obstacle_list_view(flight_alt: float):
                 if idx < len(st.session_state.obstacles_gcj):
                     render_obstacle_card(idx, flight_alt, cols[col_idx])
     else:
-        st.info("暂无任何障碍物，可以在「地图视图」中绘制添加")
+        st.info("📭 暂无任何障碍物，可以在「地图视图」中绘制添加")
 
 def render_obstacle_card(idx: int, flight_alt: float, container):
     """渲染单个障碍物卡片"""
@@ -1380,7 +1489,7 @@ def render_save_buttons():
     with col_save1:
         if st.button("💾 保存到文件", use_container_width=True, type="primary"):
             if save_obstacles(st.session_state.obstacles_gcj):
-                st.success(f"已保存到 {config.CONFIG_FILE}")
+                st.success(f"✅ 已保存到 {config.CONFIG_FILE}")
                 st.balloons()
     
     with col_save2:
@@ -1389,10 +1498,10 @@ def render_save_buttons():
             if loaded:
                 st.session_state.obstacles_gcj = loaded
                 update_path_after_obstacle_change(st.session_state.last_flight_altitude)
-                st.success(f"已加载 {len(loaded)} 个障碍物")
+                st.success(f"✅ 已加载 {len(loaded)} 个障碍物")
                 st.rerun()
             else:
-                st.warning("无配置文件")
+                st.warning("⚠️ 无配置文件")
     
     with col_save3:
         if st.button("🗑️ 清除所有", use_container_width=True):
@@ -1401,7 +1510,7 @@ def render_save_buttons():
             st.session_state.obstacles_gcj = []
             save_obstacles([])
             update_path_after_obstacle_change(st.session_state.last_flight_altitude)
-            st.success("已清除所有障碍物")
+            st.success("✅ 已清除所有障碍物")
             st.rerun()
 
 def update_path_after_obstacle_change(flight_alt: float):
