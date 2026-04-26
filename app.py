@@ -257,7 +257,7 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], 
                   obstacles_gcj: List[Dict], flight_altitude: float, 
                   safety_radius: float = 5) -> List[List[float]]:
-    """向左绕行路径 - 沿障碍物边界向终点靠近"""
+    """向左绕行路径 - 沿障碍物左侧边界向终点靠近"""
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
@@ -283,75 +283,56 @@ def find_left_path(start: List[float], end: List[float],
         return [start, end]
     
     # 计算偏移量（安全距离）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 2)
+    offset_lng, offset_lat = meters_to_deg(safety_radius)
     
-    # 向左绕行：沿障碍物左侧边界
+    # 向左绕行：使用障碍物左侧边界
     left_boundary_x = min_lng_all - offset_lng
     
-    # 计算起点和终点相对于障碍物的位置
-    start_y = start[1]
-    end_y = end[1]
-    obs_top = max_lat_all
-    obs_bottom = min_lat_all
+    # 获取障碍物的纬度范围
+    bound_min_lat = min_lat_all
+    bound_max_lat = max_lat_all
+    
+    # 找到起点和终点在左侧边界上的投影点
+    def clamp(value, min_val, max_val):
+        return max(min_val, min(max_val, value))
+    
+    proj_start_y = clamp(start[1], bound_min_lat, bound_max_lat)
+    proj_end_y = clamp(end[1], bound_min_lat, bound_max_lat)
     
     waypoints = [start]
     
-    # 判断从上方还是下方绕过
-    obs_center_y = (obs_top + obs_bottom) / 2
+    # 如果起点不在左侧边界纬度范围内，先移动到边界
+    if start[1] < bound_min_lat or start[1] > bound_max_lat:
+        waypoints.append([left_boundary_x, proj_start_y])
     
-    if start_y < obs_bottom and end_y < obs_bottom:
-        # 都在下方，直线绕过
-        waypoints.append([left_boundary_x, start_y])
-        waypoints.append([left_boundary_x, end_y])
-    elif start_y > obs_top and end_y > obs_top:
-        # 都在上方，直线绕过
-        waypoints.append([left_boundary_x, start_y])
-        waypoints.append([left_boundary_x, end_y])
-    elif start_y < obs_bottom and end_y > obs_top:
-        # 起点在下，终点在上，沿左侧边界绕过
-        waypoints.append([left_boundary_x, start_y])
-        waypoints.append([left_boundary_x, obs_bottom - offset_lat])
-        # 沿左侧边界向上移动
-        waypoints.append([left_boundary_x, obs_top + offset_lat])
-        waypoints.append([left_boundary_x, end_y])
-    elif start_y > obs_top and end_y < obs_bottom:
-        # 起点在上，终点在下，沿左侧边界绕过
-        waypoints.append([left_boundary_x, start_y])
-        waypoints.append([left_boundary_x, obs_top + offset_lat])
-        # 沿左侧边界向下移动
-        waypoints.append([left_boundary_x, obs_bottom - offset_lat])
-        waypoints.append([left_boundary_x, end_y])
-    else:
-        # 其他情况，创建基础绕过点
-        mid_y = (start_y + end_y) / 2
-        if mid_y < obs_center_y:
-            # 偏向下方，从下方绕过
-            waypoints.append([left_boundary_x, start_y])
-            waypoints.append([left_boundary_x, obs_bottom - offset_lat])
-            waypoints.append([left_boundary_x, end_y])
-        else:
-            # 偏向上方，从上方绕过
-            waypoints.append([left_boundary_x, start_y])
-            waypoints.append([left_boundary_x, obs_top + offset_lat])
-            waypoints.append([left_boundary_x, end_y])
+    # 沿左侧边界移动（从起点投影到终点投影）
+    if abs(proj_start_y - proj_end_y) > 1e-10:
+        waypoints.append([left_boundary_x, proj_start_y])
+        waypoints.append([left_boundary_x, proj_end_y])
+    
+    # 如果终点不在左侧边界纬度范围内，从边界移动到终点
+    if end[1] < bound_min_lat or end[1] > bound_max_lat:
+        waypoints.append([left_boundary_x, proj_end_y])
     
     waypoints.append(end)
     
-    # 简化路径：移除冗余的共线点
-    simplified = [waypoints[0]]
-    for i in range(1, len(waypoints) - 1):
-        p1 = simplified[-1]
-        p2 = waypoints[i]
-        p3 = waypoints[i + 1]
-        
-        # 计算叉积判断是否共线
-        cross = (p2[0] - p1[0]) * (p3[1] - p2[1]) - (p2[1] - p1[1]) * (p3[0] - p2[0])
-        if abs(cross) > 1e-10:  # 不共线，保留该点
-            simplified.append(p2)
+    # 去重：移除连续的重复点
+    unique_waypoints = []
+    for wp in waypoints:
+        if not unique_waypoints:
+            unique_waypoints.append(wp)
+        else:
+            last = unique_waypoints[-1]
+            if abs(wp[0] - last[0]) > 1e-10 or abs(wp[1] - last[1]) > 1e-10:
+                unique_waypoints.append(wp)
     
-    simplified.append(waypoints[-1])
+    # 如果路径只有起点和终点（没有添加任何航点），添加一个中间点
+    if len(unique_waypoints) == 2:
+        mid_lat = (start[1] + end[1]) / 2
+        clamped_mid_lat = clamp(mid_lat, bound_min_lat, bound_max_lat)
+        unique_waypoints.insert(1, [left_boundary_x, clamped_mid_lat])
     
-    return simplified
+    return unique_waypoints
 
 def find_right_path(start: List[float], end: List[float], 
                    obstacles_gcj: List[Dict], flight_altitude: float, 
@@ -362,31 +343,30 @@ def find_right_path(start: List[float], end: List[float],
     if not blocking_obs:
         return [start, end]
     
-    # 计算中点
-    mid_x = (start[0] + end[0]) / 2
-    mid_y = (start[1] + end[1]) / 2
+    # 获取所有阻挡障碍物的边界
+    min_lng_all = float('inf')
+    max_lng_all = -float('inf')
     
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = math.sqrt(dx*dx + dy*dy)
+    for obs in blocking_obs:
+        coords = obs.get('polygon', [])
+        if coords:
+            bounds = get_polygon_bounds(coords)
+            if bounds:
+                min_lng_all = min(min_lng_all, bounds['min_lng'])
+                max_lng_all = max(max_lng_all, bounds['max_lng'])
     
-    if length == 0:
+    if min_lng_all == float('inf'):
         return [start, end]
     
-    perp_x = dy / length
-    perp_y = -dx / length
+    # 计算偏移量
+    offset_lng, offset_lat = meters_to_deg(safety_radius)
     
-    offset_dist = safety_radius * config.WAYPOINT_OFFSET_FACTOR
-    lat_rad = math.radians(mid_y)
-    lng_scale = 111000 * math.cos(lat_rad)
-    lat_scale = 111000
+    # 向右绕行：使用障碍物右侧边界
+    right_boundary_x = max_lng_all + offset_lng
     
-    offset_x = perp_x * offset_dist / lng_scale
-    offset_y = perp_y * offset_dist / lat_scale
+    waypoints = [start, [right_boundary_x, start[1]], [right_boundary_x, end[1]], end]
     
-    waypoint = [mid_x + offset_x, mid_y + offset_y]
-    
-    return [start, waypoint, end]
+    return waypoints
 
 def calculate_path_length(path: List[List[float]]) -> float:
     total = 0.0
