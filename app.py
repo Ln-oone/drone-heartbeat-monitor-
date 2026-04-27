@@ -256,8 +256,10 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：起点 → 障碍物顶部上方 → 向右绕过 → 终点
-    支持多段直线和自适应绕行高度
+    向左绕行：使用三段直线绕过障碍物群
+    第一段：起点 → 障碍物左上方
+    第二段：障碍物左上方 → 障碍物右上方  
+    第三段：障碍物右上方 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -273,93 +275,45 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     for obs in blocking_obs:
         coords = obs.get('polygon', [])
         if coords:
-            bounds = get_polygon_bounds(coords)
-            if bounds:
-                min_lng_all = min(min_lng_all, bounds['min_lng'])
-                max_lng_all = max(max_lng_all, bounds['max_lng'])
-                min_lat_all = min(min_lat_all, bounds['min_lat'])
-                max_lat_all = max(max_lat_all, bounds['max_lat'])
+            for point in coords:
+                min_lng_all = min(min_lng_all, point[0])
+                max_lng_all = max(max_lng_all, point[0])
+                min_lat_all = min(min_lat_all, point[1])
+                max_lat_all = max(max_lat_all, point[1])
     
     if min_lng_all == float('inf'):
         return [start, end]
     
-    # 计算安全偏移距离（根据障碍物大小动态调整）
-    base_offset_lng, base_offset_lat = meters_to_deg(safety_radius * 3)
+    # 安全偏移距离（米转度）
+    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 5)  # 5倍安全半径确保安全
     
-    # 障碍物的宽度和高度
-    obs_width = max_lng_all - min_lng_all
-    obs_height = max_lat_all - min_lat_all
+    # 构建绕行路径
+    path = []
+    path.append(start)  # 起点
     
-    # 动态调整偏移量
-    offset_lng = max(base_offset_lng, obs_width * 0.5)
-    offset_lat = max(base_offset_lat, obs_height * 0.3)
+    # 第一段：向上绕过障碍物顶部
+    waypoint1 = [
+        min_lng_all - safe_dist_lng,  # 向左偏移
+        max_lat_all + safe_dist_lat   # 向上偏移
+    ]
+    path.append(waypoint1)
     
-    # 构建路径点列表
-    path = [start]
+    # 第二段：向右水平移动，越过障碍物
+    waypoint2 = [
+        max_lng_all + safe_dist_lng,  # 向右偏移
+        max_lat_all + safe_dist_lat   # 保持高度
+    ]
+    path.append(waypoint2)
     
-    # 判断起点位置，决定如何绕行
-    start_relative_x = start[0] - min_lng_all
-    start_relative_y = start[1] - min_lat_all
+    # 第三段：向下/向终点靠近
+    waypoint3 = [
+        max_lng_all + safe_dist_lng,  # 保持右侧位置
+        end[1]                        # 与终点同纬度
+    ]
+    path.append(waypoint3)
     
-    if start_relative_x < 0 and start_relative_y < 0:
-        # 起点在左下方，从左上角绕行
-        waypoint1 = [min_lng_all - offset_lng, max_lat_all + offset_lat]
-        waypoint2 = [max_lng_all + offset_lng, max_lat_all + offset_lat]
-        waypoint3 = [max_lng_all + offset_lng, end[1]]
-        
-        path.extend([waypoint1, waypoint2, waypoint3])
-        
-    elif start_relative_x < 0 and start_relative_y > 0:
-        # 起点在左上方，从左下角绕行
-        waypoint1 = [min_lng_all - offset_lng, min_lat_all - offset_lat]
-        waypoint2 = [max_lng_all + offset_lng, min_lat_all - offset_lat]
-        waypoint3 = [max_lng_all + offset_lng, end[1]]
-        
-        path.extend([waypoint1, waypoint2, waypoint3])
-        
-    else:
-        # 默认方案：从顶部绕行
-        # 计算合适的绕行高度
-        if end[1] > max_lat_all:
-            # 终点在下方，从顶部绕过后向下
-            waypoint1 = [min_lng_all - offset_lng, max_lat_all + offset_lat]
-            waypoint2 = [max_lng_all + offset_lng, max_lat_all + offset_lat]
-            path.extend([waypoint1, waypoint2])
-            
-            # 如果终点较远，添加中间过渡点
-            if end[1] < start[1]:
-                waypoint3 = [max_lng_all + offset_lng, end[1] + offset_lat]
-                path.append(waypoint3)
-        else:
-            # 终点在上方，从底部绕行
-            waypoint1 = [min_lng_all - offset_lng, min_lat_all - offset_lat]
-            waypoint2 = [max_lng_all + offset_lng, min_lat_all - offset_lat]
-            path.extend([waypoint1, waypoint2])
-            
-            if end[1] > start[1]:
-                waypoint3 = [max_lng_all + offset_lng, end[1] - offset_lat]
-                path.append(waypoint3)
-    
-    # 添加终点
+    # 终点
     path.append(end)
-    
-    # 可选：简化路径，移除不必要的中间点
-    if len(path) > 3:
-        simplified = [path[0]]
-        for i in range(1, len(path) - 1):
-            # 检查当前点是否必要
-            prev = simplified[-1]
-            curr = path[i]
-            nxt = path[i + 1]
-            
-            # 如果三点共线，跳过中间点
-            cross = abs((prev[0] - curr[0]) * (nxt[1] - curr[1]) - 
-                       (prev[1] - curr[1]) * (nxt[0] - curr[0]))
-            
-            if cross > 1e-8:
-                simplified.append(curr)
-        simplified.append(path[-1])
-        path = simplified
     
     return path
 
