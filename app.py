@@ -254,75 +254,12 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
                 blocking.append(obs)
     return blocking
 
-def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], 
-                   flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
+def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从障碍物左侧水平绕过
-    
-    路径: 起点 → 绕行点（左侧） → 终点
-    保持在同一高度，只改变水平方向
-    """
-    blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
-    
-    if not blocking_obs:
-        return [start, end]
-    
-    # 计算所有阻挡障碍物的整体边界
-    min_lng = float('inf')
-    max_lng = -float('inf')
-    min_lat = float('inf')
-    max_lat = -float('inf')
-    
-    for obs in blocking_obs:
-        coords = obs.get('polygon', [])
-        if coords:
-            for point in coords:
-                min_lng = min(min_lng, point[0])
-                max_lng = max(max_lng, point[0])
-                min_lat = min(min_lat, point[1])
-                max_lat = max(max_lat, point[1])
-    
-    if min_lng == float('inf'):
-        return [start, end]
-    
-    # 计算航线的方向向量
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = math.sqrt(dx*dx + dy*dy)
-    
-    if length == 0:
-        return [start, end]
-    
-    # 计算垂直于航线的左侧单位向量 (-dy, dx) / length
-    perp_x = -dy / length
-    perp_y = dx / length
-    
-    # 计算障碍物中心到航线的垂直偏移
-    center_lng = (min_lng + max_lng) / 2
-    center_lat = (min_lat + max_lat) / 2
-    
-    # 获取安全偏移量（米转度）
-    safe_lng, safe_lat = meters_to_deg(safety_radius * 3)
-    
-    # 计算障碍物在垂直方向上的半宽（米转度）
-    # 近似：使用经度跨度和纬度跨度的最大值
-    obs_width_deg = max(max_lng - min_lng, max_lat - min_lat)
-    
-    # 左侧绕行点：障碍物左侧 + 安全距离
-    left_offset = -abs(obs_width_deg) - safe_lng
-    
-    waypoint_x = center_lng + perp_x * left_offset
-    waypoint_y = center_lat + perp_y * left_offset
-    
-    return [start, [waypoint_x, waypoint_y], end]
-
-
-def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], 
-                    flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
-    """
-    向右绕行：从障碍物右侧水平绕过
-    
-    路径: 起点 → 绕行点（右侧） → 终点
+    向左绕行：从顶部绕过障碍物
+    第1段（起点→点1）：最长，垂直向上飞到很高处
+    第2段（点1→点2）：次长，水平向右飞过障碍物顶部
+    第3段（点2→终点）：最短，垂直向下到终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -330,52 +267,51 @@ def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Di
         return [start, end]
     
     # 计算所有阻挡障碍物的整体边界
-    min_lng = float('inf')
     max_lng = -float('inf')
-    min_lat = float('inf')
     max_lat = -float('inf')
+    min_lat = float('inf')
     
     for obs in blocking_obs:
         coords = obs.get('polygon', [])
         if coords:
             for point in coords:
-                min_lng = min(min_lng, point[0])
                 max_lng = max(max_lng, point[0])
-                min_lat = min(min_lat, point[1])
                 max_lat = max(max_lat, point[1])
+                min_lat = min(min_lat, point[1])
     
-    if min_lng == float('inf'):
+    if max_lng == -float('inf'):
         return [start, end]
     
-    # 计算航线的方向向量
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = math.sqrt(dx*dx + dy*dy)
-    
-    if length == 0:
-        return [start, end]
-    
-    # 计算垂直于航线的右侧单位向量 (dy, -dx) / length
-    perp_x = dy / length
-    perp_y = -dx / length
-    
-    # 计算障碍物中心
-    center_lng = (min_lng + max_lng) / 2
-    center_lat = (min_lat + max_lat) / 2
-    
-    # 安全偏移量
+    # 安全偏移距离（米转度）
     safe_lng, safe_lat = meters_to_deg(safety_radius * 3)
     
-    # 障碍物宽度
-    obs_width_deg = max(max_lng - min_lng, max_lat - min_lat)
+    # 计算障碍物的高度
+    obstacle_height = max_lat - min_lat
     
-    # 右侧绕行点：障碍物右侧 + 安全距离
-    right_offset = abs(obs_width_deg) + safe_lng
+    # 第1段：起点 → 点1（垂直向上，距离最长）
+    # 向上飞到障碍物顶部上方很远处（障碍物高度的3倍 + 安全偏移）
+    # ✨ 微调：增加 0.000001 度纬度偏移，使一号绕行点向上移动约0.111米
+    VERTICAL_OFFSET = 0.000001  # 约0.111米
     
-    waypoint_x = center_lng + perp_x * right_offset
-    waypoint_y = center_lat + perp_y * right_offset
+    point1 = [
+        start[0],  # X坐标不变
+        max_lat + obstacle_height * 3 + safe_lat * 5 + VERTICAL_OFFSET  # 飞到很高处 + 微调
+    ]
     
-    return [start, [waypoint_x, waypoint_y], end]
+    # 第2段：点1 → 点2（水平向右，距离次长）
+    # 向右飞过整个障碍物宽度 + 额外距离
+    point2 = [
+        max_lng + obstacle_height * 2 + safe_lng * 3,  # 向右很远
+        point1[1]  # Y坐标不变（保持高度）
+    ]
+    
+    # 第3段：点2 → 终点（垂直向下，距离最短）
+    point3 = end
+    
+    # 构建路径
+    path = [start, point1, point2, point3]
+    
+    return path
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
