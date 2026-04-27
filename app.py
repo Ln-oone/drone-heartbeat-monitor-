@@ -256,8 +256,8 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从顶部绕过障碍物（避开顶部边缘）
-    路径：起点 → 向右上角移动 → 向右移动 → 终点
+    向左绕行：从顶部绕过障碍物，第一个绕行点在障碍物左上方
+    路径：起点 → 右上（避开顶部）→ 向右 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -267,8 +267,8 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     # 计算所有阻挡障碍物的整体边界
     min_lng = float('inf')
     max_lng = -float('inf')
-    min_lat = float('inf')
     max_lat = -float('inf')
+    min_lat = float('inf')
     
     for obs in blocking_obs:
         coords = obs.get('polygon', [])
@@ -276,34 +276,34 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
             for point in coords:
                 min_lng = min(min_lng, point[0])
                 max_lng = max(max_lng, point[0])
-                min_lat = min(min_lat, point[1])
                 max_lat = max(max_lat, point[1])
+                min_lat = min(min_lat, point[1])
     
-    if max_lng == -float('inf'):
+    if min_lng == float('inf'):
         return [start, end]
     
-    # 安全偏移（加大偏移量）
-    safe_lng, safe_lat = meters_to_deg(50)  # 50米安全距离
+    # 安全偏移（30米转度）
+    safe_lng, safe_lat = meters_to_deg(30)
     
-    # 计算障碍物尺寸
-    obstacle_width = max_lng - min_lng
+    # 障碍物尺寸
     obstacle_height = max_lat - min_lat
+    obstacle_width = max_lng - min_lng
     
-    # 点1：向右上方移动（避开顶部边缘）
-    # 向右移动：障碍物宽度的1.5倍
-    # 向上移动：障碍物高度的3倍
+    # 第一个绕行点：在障碍物左上方（既向上又向右）
+    # 向上移动：障碍物高度 × 2 + 安全偏移 × 2
+    # 向右移动：障碍物宽度的 0.3 倍 + 安全偏移（保持在左侧但稍微右移）
     waypoint1 = [
-        start[0] + obstacle_width * 1.5 + safe_lng * 2,  # 向右移动
-        max_lat + obstacle_height * 3 + safe_lat * 3      # 向上移动
+        min_lng - safe_lng * 0.5,  # 在左侧稍微向右一点（避免碰到顶部）
+        max_lat + obstacle_height * 2 + safe_lat * 3  # 向上很高
     ]
     
-    # 点2：继续向右移动（确保完全越过障碍物）
+    # 第二个绕行点：继续向右，完全越过障碍物
     waypoint2 = [
-        max_lng + obstacle_width + safe_lng * 3,  # 向右移动到更远
-        waypoint1[1]                              # 保持高度
+        max_lng + obstacle_width + safe_lng * 3,  # 向右到右侧远处
+        waypoint1[1]  # 保持相同高度
     ]
     
-    # 点3：终点
+    # 第三个点：终点
     waypoint3 = end
     
     return [start, waypoint1, waypoint2, waypoint3]
