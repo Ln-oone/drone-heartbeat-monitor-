@@ -288,27 +288,27 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     # 计算障碍物的高度
     obstacle_height = max_lat - min_lat
     
-    # 第1段：起点 → 点1（垂直向上，刚好超过障碍物顶部）
-    # 修改：只向上飞到障碍物顶部上方一点点（安全偏移即可）
+    # 第1段：起点 → 点1（垂直向上）
+    # 关键：确保点1的Y坐标大于起点的Y坐标（向上飞）
+    target_y = max(max_lat + safe_lat, start[1] + safe_lat)
     point1 = [
         start[0],  # X坐标不变
-        max_lat + safe_lat  # 只飞到障碍物顶部上方安全距离
+        target_y   # 向上飞到障碍物顶部上方
     ]
     
-    # 第2段：点1 → 点2（水平向右，距离次长）
-    # 向右飞过整个障碍物宽度 + 额外距离
+    # 第2段：点1 → 点2（水平向右）
     point2 = [
-        max_lng + obstacle_height * 2 + safe_lng * 3,  # 向右很远
+        max_lng + obstacle_height + safe_lng * 3,  # 向右飞过障碍物
         point1[1]  # Y坐标不变（保持高度）
     ]
     
-    # 第3段：点2 → 终点（垂直向下，距离最短）
+    # 第3段：点2 → 终点（垂直向下）
     point3 = end
     
     # 构建路径
     path = [start, point1, point2, point3]
     
-    return path       
+    return path
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
