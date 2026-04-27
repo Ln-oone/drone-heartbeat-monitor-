@@ -257,8 +257,7 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
     向左绕行：在障碍物群左侧使用垂直式线段绕过
-    路径：起点 → 垂直移动 → 垂直向右 → 垂直移动 → 终点
-    自动选择向上或向下绕行（选择更短的路径）
+    路径：起点 → 垂直向上 → 垂直向右 → 垂直向下 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -283,67 +282,25 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     if min_lng_all == float('inf'):
         return [start, end]
     
-    # 计算安全偏移距离（米转度）
+    # 安全偏移距离（米转度）
     safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 3)
     
-    # 计算向上和向下绕行的距离
-    up_distance = abs(max_lat_all + safe_dist_lat - start[1]) + abs(max_lat_all + safe_dist_lat - end[1])
-    down_distance = abs(min_lat_all - safe_dist_lat - start[1]) + abs(min_lat_all - safe_dist_lat - end[1])
+    # 关键点：
+    # - 右侧X坐标：障碍物右侧（经度增大方向）
+    # - 顶部Y坐标：障碍物顶部向上偏移
+    right_x = max_lng_all + safe_dist_lng
+    top_y = max_lat_all + safe_dist_lat
     
-    path = []
-    path.append(start)  # 起点
-    
-    # 选择较短的绕行方向
-    if up_distance <= down_distance:
-        # 向上绕行
-        # 点1：垂直向上移动到障碍物顶部上方
-        waypoint1 = [
-            start[0],
-            max_lat_all + safe_dist_lat
-        ]
-        path.append(waypoint1)
-        
-        # 点2：垂直向右移动到障碍物左侧
-        waypoint2 = [
-            min_lng_all - safe_dist_lng,
-            max_lat_all + safe_dist_lat
-        ]
-        path.append(waypoint2)
-        
-        # 点3：垂直向下移动到终点高度
-        waypoint3 = [
-            min_lng_all - safe_dist_lng,
-            end[1]
-        ]
-        path.append(waypoint3)
-    else:
-        # 向下绕行
-        # 点1：垂直向下移动到障碍物底部下方
-        waypoint1 = [
-            start[0],
-            min_lat_all - safe_dist_lat
-        ]
-        path.append(waypoint1)
-        
-        # 点2：垂直向右移动到障碍物左侧
-        waypoint2 = [
-            min_lng_all - safe_dist_lng,
-            min_lat_all - safe_dist_lat
-        ]
-        path.append(waypoint2)
-        
-        # 点3：垂直向上移动到终点高度
-        waypoint3 = [
-            min_lng_all - safe_dist_lng,
-            end[1]
-        ]
-        path.append(waypoint3)
-    
-    # 终点
-    path.append(end)
+    # 构建路径：起点 → 垂直向上 → 垂直向右 → 垂直向下 → 终点
+    path = [
+        start,                    # 起点
+        [start[0], top_y],        # 1. 垂直向上到障碍物顶部
+        [right_x, top_y],         # 2. 垂直向右到障碍物右侧
+        [right_x, end[1]],        # 3. 垂直向下到终点高度
+        end                       # 4. 水平向左到终点
+    ]
     
     return path
-
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
