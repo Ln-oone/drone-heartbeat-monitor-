@@ -256,10 +256,10 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：按指定角度飞行
-    起点 → 绕行点1：30°方向（障碍物群左侧）
-    绕行点1 → 绕行点2：200°方向（障碍物群上方）
-    绕行点2 → 终点：直接连接
+    向左绕行：折线路径
+    起点 → 绕行点1（30°方向，飞到障碍物左侧）
+    绕行点1 → 绕行点2（200°方向，从障碍物上方飞过）
+    绕行点2 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -289,35 +289,34 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     center_lng = (min_lng + max_lng) / 2
     center_lat = (min_lat + max_lat) / 2
     
+    # 障碍物尺寸
+    obstacle_width = max_lng - min_lng
+    obstacle_height = max_lat - min_lat
+    
+    # 绕行点1：从起点沿30°方向（向右上方）飞到障碍物左侧
+    # 30°方向：dx = cos(30°), dy = sin(30°)
     import math
-    
-    # 第1段：30°方向（从起点向左上方飞行）
-    angle1 = 30  # 度
-    rad1 = math.radians(angle1)
-    
-    # 计算飞行距离（足够远以绕过障碍物左侧）
-    distance1 = math.sqrt((center_lng - start[0])**2 + (center_lat - start[1])**2) * 2
-    distance1 = max(distance1, meters_to_deg(100)[0])  # 至少100米
-    
-    # 计算绕行点1
-    dx1 = distance1 * math.cos(rad1)
-    dy1 = distance1 * math.sin(rad1)
+    angle1 = math.radians(30)
+    distance1 = obstacle_width * 2 + safe_lng * 5  # 飞行距离
+    dx1 = math.cos(angle1) * distance1
+    dy1 = math.sin(angle1) * distance1
     waypoint1 = [start[0] + dx1, start[1] + dy1]
     
-    # 第2段：200°方向（从绕行点1向左下方/水平飞行，越过障碍物上方）
-    angle2 = 200  # 度
-    rad2 = math.radians(angle2)
+    # 确保绕行点1在障碍物左侧（经度小于障碍物最小经度）
+    waypoint1[0] = min(waypoint1[0], min_lng - safe_lng)
     
-    # 计算飞行距离（足够远以越过障碍物）
-    distance2 = math.sqrt((max_lng - waypoint1[0])**2 + (max_lat - waypoint1[1])**2) * 1.5
-    distance2 = max(distance2, meters_to_deg(150)[0])  # 至少150米
-    
-    # 计算绕行点2
-    dx2 = distance2 * math.cos(rad2)
-    dy2 = distance2 * math.sin(rad2)
+    # 绕行点2：从绕行点1沿200°方向（向左下方）飞到障碍物上方
+    # 200°方向：dx = cos(200°), dy = sin(200°)（都是负值）
+    angle2 = math.radians(200)
+    distance2 = obstacle_height * 2 + safe_lat * 5  # 飞行距离
+    dx2 = math.cos(angle2) * distance2
+    dy2 = math.sin(angle2) * distance2
     waypoint2 = [waypoint1[0] + dx2, waypoint1[1] + dy2]
     
-    # 第3段：直接到终点
+    # 确保绕行点2在障碍物上方（纬度大于障碍物最大纬度）
+    waypoint2[1] = max(waypoint2[1], max_lat + safe_lat)
+    
+    # 终点
     waypoint3 = end
     
     return [start, waypoint1, waypoint2, waypoint3]
