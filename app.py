@@ -292,7 +292,7 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     # 向上飞到障碍物顶部上方很远处（障碍物高度的3倍 + 安全偏移）
     point1 = [
         start[0],  # X坐标不变
-        max_lat + obstacle_height * 3 + safe_lat * 5 + 0.0003  # 纬度增大0.0003（向上移动）
+        max_lat + obstacle_height * 3 + safe_lat * 5 + 0.0002  # ⬅️ 纬度增加 0.0002
     ]
     
     # 第2段：点1 → 点2（水平向右，距离次长）
