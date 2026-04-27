@@ -256,27 +256,50 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：沿障碍物左侧边界
+    向左绕行：从左侧绕过所有障碍物
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 获取障碍物左侧边界的最小经度
-    min_lng = min([point[0] for obs in blocking_obs for point in obs.get('polygon', [])])
+    # 计算所有障碍物的最左侧和最右侧
+    min_lng = float('inf')
+    max_lng = -float('inf')
     
-    # 安全偏移（25米）
-    safe_lng, _ = meters_to_deg(25)
+    for obs in blocking_obs:
+        for point in obs.get('polygon', []):
+            min_lng = min(min_lng, point[0])
+            max_lng = max(max_lng, point[0])
     
-    # 左侧X坐标
-    left_x = min_lng - safe_lng
+    # 计算所有障碍物的Y范围
+    all_y = []
+    for obs in blocking_obs:
+        for point in obs.get('polygon', []):
+            all_y.append(point[1])
     
-    # 绕行点：直接使用起点和终点的Y坐标，保持左侧X不变
-    waypoint1 = [left_x, start[1]]  # 与起点同Y
-    waypoint2 = [left_x, end[1]]    # 与终点同Y
+    min_y = min(all_y)
+    max_y = max(all_y)
     
-    return [start, waypoint1, waypoint2, end]
+    # 安全偏移（50米）
+    offset_lng, offset_lat = meters_to_deg(50)
+    
+    # 左侧X坐标（所有障碍物最左侧向左偏移）
+    left_x = min_lng - offset_lng * 2
+    
+    # 构建路径：起点 -> 向左水平飞 -> 向下/向上飞 -> 向右水平飞到终点
+    path = [start]
+    
+    # 先水平向左飞到左侧X坐标
+    path.append([left_x, start[1]])
+    
+    # 再垂直飞到终点的Y坐标
+    path.append([left_x, end[1]])
+    
+    # 最后水平向右飞到终点
+    path.append(end)
+    
+    return path
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
