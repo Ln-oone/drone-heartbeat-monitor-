@@ -256,8 +256,8 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：在障碍物群左侧使用垂直式线段绕过
-    路径：起点 → 垂直向上 → 垂直向右 → 垂直向下 → 终点
+    向左绕行：在障碍物顶部使用垂直式线段绕过（起点到顶部距离加长）
+    路径：起点 → 垂直向上（长距离） → 垂直向右 → 垂直向下 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -282,22 +282,28 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     if min_lng_all == float('inf'):
         return [start, end]
     
+    # 计算障碍物的高度范围
+    obstacle_height_deg = max_lat_all - min_lat_all
+    
     # 安全偏移距离（米转度）
-    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 3)
+    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 5)
     
-    # 关键点：
-    # - 右侧X坐标：障碍物右侧（经度增大方向）
-    # - 顶部Y坐标：障碍物顶部向上偏移
+    # 起点到顶部的额外距离（至少是障碍物高度的1.5倍，确保足够的上升距离）
+    extra_up_distance = max(obstacle_height_deg * 1.5, safe_dist_lat * 2)
+    
+    # 点1：垂直向上到障碍物顶部上方（加长距离）
+    top_y = max_lat_all + safe_dist_lat + extra_up_distance
+    
+    # 点2：垂直向右到障碍物右侧
     right_x = max_lng_all + safe_dist_lng
-    top_y = max_lat_all + safe_dist_lat
     
-    # 构建路径：起点 → 垂直向上 → 垂直向右 → 垂直向下 → 终点
+    # 构建路径
     path = [
-        start,                    # 起点
-        [start[0], top_y],        # 1. 垂直向上到障碍物顶部
-        [right_x, top_y],         # 2. 垂直向右到障碍物右侧
-        [right_x, end[1]],        # 3. 垂直向下到终点高度
-        end                       # 4. 水平向左到终点
+        start,                          # 起点
+        [start[0], top_y],              # 1. 垂直向上（长距离）
+        [right_x, top_y],               # 2. 垂直向右
+        [right_x, end[1]],              # 3. 垂直向下
+        end                             # 4. 到终点
     ]
     
     return path
