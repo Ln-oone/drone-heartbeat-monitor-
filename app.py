@@ -259,7 +259,8 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     向左绕行：从顶部绕过障碍物
     第1段（起点→点1）：最长，垂直向上飞到很高处
     第2段（点1→点2）：次长，水平向右飞过障碍物顶部
-    第3段（点2→终点）：最短，垂直向下到终点
+    第3段（点2→点3）：中等，垂直向下到终点高度
+    第4段（点3→终点）：最短，水平向右到终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -288,25 +289,29 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     # 计算障碍物的高度
     obstacle_height = max_lat - min_lat
     
-    # 第1段：起点 → 点1（垂直向上，距离最长）
-    # 向上飞到障碍物顶部上方很远处（障碍物高度的3倍 + 安全偏移）
+    # 点1：垂直向上飞到障碍物顶部上方很远处
     point1 = [
-        start[0],  # X坐标不变
-        max_lat + obstacle_height * 3 + safe_lat * 5  # 飞到很高处
+        start[0],
+        max_lat + obstacle_height * 3 + safe_lat * 5
     ]
     
-    # 第2段：点1 → 点2（水平向右，距离次长）
-    # 向右飞过整个障碍物宽度 + 额外距离
+    # 点2：水平向右飞过障碍物
     point2 = [
-        max_lng + obstacle_height * 2 + safe_lng * 3,  # 向右很远
-        point1[1]  # Y坐标不变（保持高度）
+        max_lng + obstacle_height * 2 + safe_lng * 3,
+        point1[1]
     ]
     
-    # 第3段：点2 → 终点（垂直向下，距离最短）
-    point3 = end
+    # 点3：垂直向下飞到终点高度（关键！避免斜线穿过障碍物）
+    point3 = [
+        point2[0],
+        end[1]
+    ]
     
-    # 构建路径
-    path = [start, point1, point2, point3]
+    # 点4：终点
+    point4 = end
+    
+    # 构建路径（4个点，都是垂直/水平线段）
+    path = [start, point1, point2, point3, point4]
     
     return path
     
