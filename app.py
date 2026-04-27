@@ -256,44 +256,44 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：斜向上绕过障碍物顶部，再斜向下到终点
-    路径：起点 → 绕行点1（障碍物左上方）→ 终点
+    向左绕行：从顶部绕过障碍物
+    路径：起点 → 向上很远 → 向右很远 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 计算所有阻挡障碍物的整体边界
-    min_lng = float('inf')
+    # 计算障碍物最右侧和最上侧
+    max_lng = -float('inf')
     max_lat = -float('inf')
     min_lat = float('inf')
     
     for obs in blocking_obs:
         for point in obs.get('polygon', []):
-            min_lng = min(min_lng, point[0])
+            max_lng = max(max_lng, point[0])
             max_lat = max(max_lat, point[1])
             min_lat = min(min_lat, point[1])
     
-    if min_lng == float('inf'):
+    if max_lng == -float('inf'):
         return [start, end]
     
-    # 安全偏移距离（米转度）
-    safe_lng, safe_lat = meters_to_deg(safety_radius * 3)
+    # 安全偏移（50米转度）
+    safe_lng, safe_lat = meters_to_deg(50)
     
-    # 计算障碍物的高度
+    # 计算障碍物高度
     obstacle_height = max_lat - min_lat
     
-    # 绕行点：在障碍物左上方
-    waypoint = [
-        min_lng - safe_lng * 2,                    # 向左偏移
-        max_lat + obstacle_height * 0.5 + safe_lat  # 向上到障碍物中部偏上
-    ]
+    # 点1：向上飞（距离＝障碍物高度×3 + 50米×3）
+    waypoint_up = [start[0], max_lat + obstacle_height * 3 + safe_lat * 3]
     
-    # 构建路径：起点 → 绕行点 → 终点
-    path = [start, waypoint, end]
+    # 点2：向右飞（距离＝障碍物高度×2 + 50米×2）
+    waypoint_right = [max_lng + obstacle_height * 2 + safe_lng * 2, waypoint_up[1]]
     
-    return path
+    # 终点
+    waypoint_end = end
+    
+    return [start, waypoint_up, waypoint_right, waypoint_end]
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
