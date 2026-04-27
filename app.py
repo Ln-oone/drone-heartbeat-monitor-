@@ -257,10 +257,7 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], 
                   obstacles_gcj: List[Dict], flight_altitude: float, 
                   safety_radius: float = 5) -> List[List[float]]:
-    """
-    向左绕行路径 - 按照图片所示：从起点出发，先向左上方绕过障碍物顶部，再向右拐向终点
-    路径: 起点 -> 左上方绕行点 -> 障碍物顶部上方 -> 终点
-    """
+    """向左绕行路径 - 从左侧绕过障碍物，沿边界向终点靠近"""
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
@@ -285,76 +282,70 @@ def find_left_path(start: List[float], end: List[float],
     if min_lng_all == float('inf'):
         return [start, end]
     
-    # 计算偏移量（安全距离）
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 2)
+    # 计算偏移量（安全距离，设为较小值使航线紧贴边界）
+    offset_lng, offset_lat = meters_to_deg(safety_radius)
     
-    # 向左绕行：先向左走到障碍物左侧，再向上绕过顶部，最后向右拐向终点
-    left_x = min_lng_all - offset_lng * 2  # 向左偏移
-    top_y = max_lat_all + offset_lat * 2   # 向上偏移（绕过顶部）
+    # 向左绕行：取障碍物最左侧，再向左偏移一点作为绕行点经度
+    left_x = min_lng_all - offset_lng
     
-    # 构建路径：起点 -> 左上角点 -> 顶部中间点 -> 终点
-    waypoints = [start]
+    # 计算绕行点的纬度：取起点和终点的中间纬度
+    # 这样航线会沿着障碍物左侧边界直接向终点靠近
+    mid_lat = (start[1] + end[1]) / 2
     
-    # 1. 先向左走到障碍物左侧
-    waypoints.append([left_x, start[1]])
+    # 确保绕行点纬度在障碍物范围内，使航线紧贴边界
+    if mid_lat < min_lat_all:
+        mid_lat = min_lat_all - offset_lat
+    elif mid_lat > max_lat_all:
+        mid_lat = max_lat_all + offset_lat
     
-    # 2. 再向上走到障碍物顶部上方
-    waypoints.append([left_x, top_y])
+    # 创建航点：起点 -> 左侧绕行点 -> 终点
+    waypoint = [left_x, mid_lat]
     
-    # 3. 向右拐到终点上方，然后向下到终点
-    waypoints.append([end[0], top_y])
-    
-    # 4. 最后到达终点
-    waypoints.append(end)
-    
-    # 简化路径：移除冗余的共线点
-    simplified = [waypoints[0]]
-    for i in range(1, len(waypoints) - 1):
-        p1 = simplified[-1]
-        p2 = waypoints[i]
-        p3 = waypoints[i + 1]
-        
-        # 检查是否共线
-        cross = (p2[0] - p1[0]) * (p3[1] - p2[1]) - (p2[1] - p1[1]) * (p3[0] - p2[0])
-        if abs(cross) > 1e-10:  # 不共线，保留该点
-            simplified.append(p2)
-    
-    simplified.append(waypoints[-1])
-    
-    return simplified
+    return [start, waypoint, end]
 
 def find_right_path(start: List[float], end: List[float], 
                    obstacles_gcj: List[Dict], flight_altitude: float, 
                    safety_radius: float = 5) -> List[List[float]]:
-    """向右绕行路径（保持不变）"""
+    """向右绕行路径"""
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 计算中点
-    mid_x = (start[0] + end[0]) / 2
-    mid_y = (start[1] + end[1]) / 2
+    # 获取所有阻挡障碍物的边界
+    min_lng_all = float('inf')
+    max_lng_all = -float('inf')
+    min_lat_all = float('inf')
+    max_lat_all = -float('inf')
     
-    dx = end[0] - start[0]
-    dy = end[1] - start[1]
-    length = math.sqrt(dx*dx + dy*dy)
+    for obs in blocking_obs:
+        coords = obs.get('polygon', [])
+        if coords:
+            bounds = get_polygon_bounds(coords)
+            if bounds:
+                min_lng_all = min(min_lng_all, bounds['min_lng'])
+                max_lng_all = max(max_lng_all, bounds['max_lng'])
+                min_lat_all = min(min_lat_all, bounds['min_lat'])
+                max_lat_all = max(max_lat_all, bounds['max_lat'])
     
-    if length == 0:
+    if max_lng_all == -float('inf'):
         return [start, end]
     
-    perp_x = dy / length
-    perp_y = -dx / length
+    # 计算偏移量
+    offset_lng, offset_lat = meters_to_deg(safety_radius)
     
-    offset_dist = safety_radius * config.WAYPOINT_OFFSET_FACTOR
-    lat_rad = math.radians(mid_y)
-    lng_scale = 111000 * math.cos(lat_rad)
-    lat_scale = 111000
+    # 向右绕行：取障碍物最右侧，再向右偏移一点作为绕行点经度
+    right_x = max_lng_all + offset_lng
     
-    offset_x = perp_x * offset_dist / lng_scale
-    offset_y = perp_y * offset_dist / lat_scale
+    # 计算绕行点的纬度
+    mid_lat = (start[1] + end[1]) / 2
     
-    waypoint = [mid_x + offset_x, mid_y + offset_y]
+    if mid_lat < min_lat_all:
+        mid_lat = min_lat_all - offset_lat
+    elif mid_lat > max_lat_all:
+        mid_lat = max_lat_all + offset_lat
+    
+    waypoint = [right_x, mid_lat]
     
     return [start, waypoint, end]
 
@@ -758,7 +749,7 @@ def render_path_strategy(flight_alt: float):
                 st.session_state.obstacles_gcj, flight_alt, "向左绕行",
                 st.session_state.safety_radius
             )
-            st.success("已切换到向左绕行模式（沿障碍物左上方绕过）")
+            st.success("已切换到向左绕行模式（沿左侧边界向终点靠近）")
             st.rerun()
     
     with col_dir3:
