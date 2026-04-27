@@ -1240,27 +1240,16 @@ def main():
         else:
             st.session_state.last_hb_time = current_time
         
-        # 修复：确保 history 中的每个元素都是字典类型
-        valid_history = []
-        for hb in st.session_state.heartbeat_sim.history:
-            if isinstance(hb, dict):
-                valid_history.append(hb)
-            else:
-                logger.warning(f"心跳数据格式错误: {type(hb)}")
-        
-        st.session_state.heartbeat_sim.history = valid_history
-        
-        if valid_history:
-            latest = valid_history[0]
+        if st.session_state.heartbeat_sim.history:
+            latest = st.session_state.heartbeat_sim.history[0]
             
-            # 确保 latest 的所有字段都存在
             col1, col2, col3, col4, col5, col6 = st.columns(6)
-            col1.metric("⏰ 时间", latest.get('timestamp', 'N/A'))
-            col2.metric("📍 纬度", f"{latest.get('lat', 0):.6f}")
-            col3.metric("📍 经度", f"{latest.get('lng', 0):.6f}")
-            col4.metric("📊 高度", f"{latest.get('altitude', 0)} m")
-            col5.metric("🔋 电压", f"{latest.get('voltage', 0)} V")
-            col6.metric("🛰️ 卫星", latest.get('satellites', 0))
+            col1.metric("⏰ 时间", latest['timestamp'])
+            col2.metric("📍 纬度", f"{latest['lat']:.6f}")
+            col3.metric("📍 经度", f"{latest['lng']:.6f}")
+            col4.metric("📊 高度", f"{latest['altitude']} m")
+            col5.metric("🔋 电压", f"{latest['voltage']} V")
+            col6.metric("🛰️ 卫星", latest['satellites'])
             
             col7, col8, col9 = st.columns(3)
             col7.metric("💨 速度", f"{latest.get('speed', 0)} m/s")
@@ -1283,8 +1272,7 @@ def main():
             
             st.subheader("📍 实时位置")
             tiles = GAODE_SATELLITE_URL if map_type == "satellite" else GAODE_VECTOR_URL
-            monitor_map = folium.Map(location=[latest.get('lat', SCHOOL_CENTER_GCJ[1]), latest.get('lng', SCHOOL_CENTER_GCJ[0])], 
-                                    zoom_start=17, tiles=tiles, attr="高德地图")
+            monitor_map = folium.Map(location=[latest['lat'], latest['lng']], zoom_start=17, tiles=tiles, attr="高德地图")
             
             for obs in st.session_state.obstacles_gcj:
                 coords = obs.get('polygon', [])
@@ -1307,7 +1295,7 @@ def main():
             
             folium.Circle(
                 radius=safety_radius,
-                location=[latest.get('lat', SCHOOL_CENTER_GCJ[1]), latest.get('lng', SCHOOL_CENTER_GCJ[0])],
+                location=[latest['lat'], latest['lng']],
                 color="blue",
                 weight=2,
                 fill=True,
@@ -1316,21 +1304,19 @@ def main():
                 popup=f"🛡️ 安全半径: {safety_radius}米"
             ).add_to(monitor_map)
             
-            trail = []
-            for hb in st.session_state.heartbeat_sim.history[:30]:
-                if isinstance(hb, dict) and hb.get('lat') and hb.get('lng'):
-                    trail.append([hb['lat'], hb['lng']])
+            trail = [[hb['lat'], hb['lng']] for hb in st.session_state.heartbeat_sim.history[:30] 
+                    if hb.get('lat') and hb.get('lng')]
             if len(trail) > 1:
                 folium.PolyLine(trail, color="orange", weight=2, opacity=0.7).add_to(monitor_map)
             
-            folium.Marker([latest.get('lat', SCHOOL_CENTER_GCJ[1]), latest.get('lng', SCHOOL_CENTER_GCJ[0])], 
-                         popup=f"当前位置\n高度: {latest.get('altitude', 0)}m\n速度: {latest.get('speed', 0)}m/s", 
+            folium.Marker([latest['lat'], latest['lng']], 
+                         popup=f"当前位置\n高度: {latest['altitude']}m\n速度: {latest['speed']}m/s", 
                          icon=folium.Icon(color='red', icon='plane', prefix='fa')).add_to(monitor_map)
             
-            if st.session_state.points_gcj.get('A'):
+            if st.session_state.points_gcj['A']:
                 folium.Marker([st.session_state.points_gcj['A'][1], st.session_state.points_gcj['A'][0]], 
                             popup="起点", icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(monitor_map)
-            if st.session_state.points_gcj.get('B'):
+            if st.session_state.points_gcj['B']:
                 folium.Marker([st.session_state.points_gcj['B'][1], st.session_state.points_gcj['B'][0]], 
                             popup="终点", icon=folium.Icon(color='red', icon='stop', prefix='fa')).add_to(monitor_map)
             
@@ -1340,23 +1326,23 @@ def main():
             col_ch1, col_ch2 = st.columns(2)
             
             with col_ch1:
-                if len(valid_history) > 1:
+                if len(st.session_state.heartbeat_sim.history) > 1:
                     alt_df = pd.DataFrame({
-                        "序号": list(range(min(30, len(valid_history)))),
-                        "高度(m)": [h.get("altitude", 0) for h in valid_history[:30]]
+                        "序号": list(range(min(30, len(st.session_state.heartbeat_sim.history)))),
+                        "高度(m)": [h["altitude"] for h in st.session_state.heartbeat_sim.history[:30]]
                     })
                     st.line_chart(alt_df, x="序号", y="高度(m)")
             
             with col_ch2:
-                if len(valid_history) > 1:
+                if len(st.session_state.heartbeat_sim.history) > 1:
                     speed_df = pd.DataFrame({
-                        "序号": list(range(min(30, len(valid_history)))),
-                        "速度(m/s)": [h.get("speed", 0) for h in valid_history[:30]]
+                        "序号": list(range(min(30, len(st.session_state.heartbeat_sim.history)))),
+                        "速度(m/s)": [h.get("speed", 0) for h in st.session_state.heartbeat_sim.history[:30]]
                     })
                     st.line_chart(speed_df, x="序号", y="速度(m/s)")
             
             st.subheader("📋 历史心跳记录")
-            history_df = pd.DataFrame(valid_history[:10])
+            history_df = pd.DataFrame(st.session_state.heartbeat_sim.history[:10])
             display_cols = ['timestamp', 'flight_time', 'lat', 'lng', 'altitude', 'speed', 'voltage', 'satellites']
             display_cols = [col for col in display_cols if col in history_df.columns]
             st.dataframe(history_df[display_cols], use_container_width=True)
