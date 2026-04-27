@@ -257,58 +257,43 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
     向左绕行：从顶部绕过障碍物
-    第1段（起点→点1）：垂直向上，刚好超过障碍物顶部
-    第2段（点1→点2）：水平向右飞过障碍物顶部
-    第3段（点2→终点）：垂直向下到终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 计算所有阻挡障碍物的整体边界
+    # 计算障碍物边界
     max_lng = -float('inf')
     max_lat = -float('inf')
     min_lat = float('inf')
     
     for obs in blocking_obs:
-        coords = obs.get('polygon', [])
-        if coords:
-            for point in coords:
-                max_lng = max(max_lng, point[0])
-                max_lat = max(max_lat, point[1])
-                min_lat = min(min_lat, point[1])
+        for point in obs.get('polygon', []):
+            max_lng = max(max_lng, point[0])
+            max_lat = max(max_lat, point[1])
+            min_lat = min(min_lat, point[1])
     
     if max_lng == -float('inf'):
         return [start, end]
     
-    # 安全偏移距离（米转度）
+    # 安全偏移
     safe_lng, safe_lat = meters_to_deg(safety_radius * 3)
     
-    # 计算障碍物的高度
+    # 障碍物高度
     obstacle_height = max_lat - min_lat
     
-    # 第1段：起点 → 点1（垂直向上）
-    # 关键：确保点1的Y坐标大于起点的Y坐标（向上飞）
-    target_y = max(max_lat + safe_lat, start[1] + safe_lat)
-    point1 = [
-        start[0],  # X坐标不变
-        target_y   # 向上飞到障碍物顶部上方
-    ]
+    # 点1：向上飞（确保比起点和障碍物顶部都高）
+    up_y = max(start[1] + safe_lat * 5, max_lat + safe_lat)
+    point1 = [start[0], up_y]
     
-    # 第2段：点1 → 点2（水平向右）
-    point2 = [
-        max_lng + obstacle_height + safe_lng * 3,  # 向右飞过障碍物
-        point1[1]  # Y坐标不变（保持高度）
-    ]
+    # 点2：向右飞
+    point2 = [max_lng + obstacle_height * 2 + safe_lng * 3, point1[1]]
     
-    # 第3段：点2 → 终点（垂直向下）
+    # 点3：终点
     point3 = end
     
-    # 构建路径
-    path = [start, point1, point2, point3]
-    
-    return path
+    return [start, point1, point2, point3]
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
