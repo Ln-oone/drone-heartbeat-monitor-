@@ -256,10 +256,8 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：使用三段直线绕过障碍物群
-    第一段：起点 → 障碍物左上方
-    第二段：障碍物左上方 → 障碍物右上方  
-    第三段：障碍物右上方 → 终点
+    向左绕行：在障碍物群左侧使用垂直式线段绕过
+    路径：起点 → 垂直向上 → 垂直向右 → 垂直向下 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -284,31 +282,31 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     if min_lng_all == float('inf'):
         return [start, end]
     
-    # 安全偏移距离（米转度）
-    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 5)  # 5倍安全半径确保安全
+    # 计算安全偏移距离（米转度）
+    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 3)  # 3倍安全半径
     
-    # 构建绕行路径
+    # 构建垂直式绕行路径
     path = []
     path.append(start)  # 起点
     
-    # 第一段：向上绕过障碍物顶部
+    # 点1：垂直向上移动到障碍物顶部上方
     waypoint1 = [
-        min_lng_all - safe_dist_lng,  # 向左偏移
-        max_lat_all + safe_dist_lat   # 向上偏移
+        start[0],                    # X坐标不变（垂直向上）
+        max_lat_all + safe_dist_lat  # 向上移动到障碍物顶部上方
     ]
     path.append(waypoint1)
     
-    # 第二段：向右水平移动，越过障碍物
+    # 点2：垂直向右移动到障碍物左侧（在障碍物左侧绕行）
     waypoint2 = [
-        max_lng_all + safe_dist_lng,  # 向右偏移
-        max_lat_all + safe_dist_lat   # 保持高度
+        min_lng_all - safe_dist_lng,  # 向右移动到障碍物左侧
+        max_lat_all + safe_dist_lat   # 保持高度不变
     ]
     path.append(waypoint2)
     
-    # 第三段：向下/向终点靠近
+    # 点3：垂直向下移动到终点高度
     waypoint3 = [
-        max_lng_all + safe_dist_lng,  # 保持右侧位置
-        end[1]                        # 与终点同纬度
+        min_lng_all - safe_dist_lng,  # 保持X坐标不变
+        end[1]                        # 向下移动到终点纬度
     ]
     path.append(waypoint3)
     
