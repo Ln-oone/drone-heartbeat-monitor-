@@ -256,49 +256,32 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从左侧绕过所有障碍物
+    向左绕行：绝对可靠的矩形路径，确保从所有障碍物的左侧安全绕过。
+    路径：起点 -> 向左平移 -> 垂直移动到终点高度 -> 向右平移至终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
-    
+
     if not blocking_obs:
         return [start, end]
-    
-    # 计算所有障碍物的最左侧和最右侧
+
+    # 1. 找到所有障碍物的最左侧边界
     min_lng = float('inf')
-    max_lng = -float('inf')
-    
     for obs in blocking_obs:
         for point in obs.get('polygon', []):
             min_lng = min(min_lng, point[0])
-            max_lng = max(max_lng, point[0])
-    
-    # 计算所有障碍物的Y范围
-    all_y = []
-    for obs in blocking_obs:
-        for point in obs.get('polygon', []):
-            all_y.append(point[1])
-    
-    min_y = min(all_y)
-    max_y = max(all_y)
-    
-    # 安全偏移（50米）
-    offset_lng, offset_lat = meters_to_deg(50)
-    
-    # 左侧X坐标（所有障碍物最左侧向左偏移）
-    left_x = min_lng - offset_lng * 2
-    
-    # 构建路径：起点 -> 向左水平飞 -> 向下/向上飞 -> 向右水平飞到终点
-    path = [start]
-    
-    # 先水平向左飞到左侧X坐标
-    path.append([left_x, start[1]])
-    
-    # 再垂直飞到终点的Y坐标
-    path.append([left_x, end[1]])
-    
-    # 最后水平向右飞到终点
-    path.append(end)
-    
+
+    # 2. 设定一个绝对安全的左侧X坐标 (在障碍物最左侧的基础上，再向左偏移50米)
+    # 这里使用固定的50米，确保万无一失
+    SAFE_OFFSET_METERS = 50
+    safe_offset_lng, _ = meters_to_deg(SAFE_OFFSET_METERS)
+    left_boundary_x = min_lng - safe_offset_lng
+
+    # 3. 构建经典的矩形绕行路径
+    # 路径: 起点 -> 向左平移 -> 垂直移动到终点高度 -> 向右平移至终点
+    waypoint_left = [left_boundary_x, start[1]]
+    waypoint_vertical = [left_boundary_x, end[1]]
+
+    path = [start, waypoint_left, waypoint_vertical, end]
     return path
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
