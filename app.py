@@ -257,7 +257,8 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
     向左绕行：在障碍物群左侧使用垂直式线段绕过
-    路径：起点 → 垂直向上 → 垂直向右 → 垂直向下 → 终点
+    路径：起点 → 垂直移动 → 垂直向右 → 垂直移动 → 终点
+    自动选择向上或向下绕行（选择更短的路径）
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -283,32 +284,60 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
         return [start, end]
     
     # 计算安全偏移距离（米转度）
-    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 3)  # 3倍安全半径
+    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 3)
     
-    # 构建垂直式绕行路径
+    # 计算向上和向下绕行的距离
+    up_distance = abs(max_lat_all + safe_dist_lat - start[1]) + abs(max_lat_all + safe_dist_lat - end[1])
+    down_distance = abs(min_lat_all - safe_dist_lat - start[1]) + abs(min_lat_all - safe_dist_lat - end[1])
+    
     path = []
     path.append(start)  # 起点
     
-    # 点1：垂直向上移动到障碍物顶部上方
-    waypoint1 = [
-        start[0],                    # X坐标不变（垂直向上）
-        max_lat_all + safe_dist_lat  # 向上移动到障碍物顶部上方
-    ]
-    path.append(waypoint1)
-    
-    # 点2：垂直向右移动到障碍物左侧（在障碍物左侧绕行）
-    waypoint2 = [
-        min_lng_all - safe_dist_lng,  # 向右移动到障碍物左侧
-        max_lat_all + safe_dist_lat   # 保持高度不变
-    ]
-    path.append(waypoint2)
-    
-    # 点3：垂直向下移动到终点高度
-    waypoint3 = [
-        min_lng_all - safe_dist_lng,  # 保持X坐标不变
-        end[1]                        # 向下移动到终点纬度
-    ]
-    path.append(waypoint3)
+    # 选择较短的绕行方向
+    if up_distance <= down_distance:
+        # 向上绕行
+        # 点1：垂直向上移动到障碍物顶部上方
+        waypoint1 = [
+            start[0],
+            max_lat_all + safe_dist_lat
+        ]
+        path.append(waypoint1)
+        
+        # 点2：垂直向右移动到障碍物左侧
+        waypoint2 = [
+            min_lng_all - safe_dist_lng,
+            max_lat_all + safe_dist_lat
+        ]
+        path.append(waypoint2)
+        
+        # 点3：垂直向下移动到终点高度
+        waypoint3 = [
+            min_lng_all - safe_dist_lng,
+            end[1]
+        ]
+        path.append(waypoint3)
+    else:
+        # 向下绕行
+        # 点1：垂直向下移动到障碍物底部下方
+        waypoint1 = [
+            start[0],
+            min_lat_all - safe_dist_lat
+        ]
+        path.append(waypoint1)
+        
+        # 点2：垂直向右移动到障碍物左侧
+        waypoint2 = [
+            min_lng_all - safe_dist_lng,
+            min_lat_all - safe_dist_lat
+        ]
+        path.append(waypoint2)
+        
+        # 点3：垂直向上移动到终点高度
+        waypoint3 = [
+            min_lng_all - safe_dist_lng,
+            end[1]
+        ]
+        path.append(waypoint3)
     
     # 终点
     path.append(end)
