@@ -256,8 +256,8 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从顶部绕过障碍物，确保不穿过
-    路径：起点 → 垂直向上 → 水平向左 → 垂直向下 → 终点
+    向左绕行：绕大圈，绝对不穿过障碍物
+    路径：起点 → 向左上角 → 向左下角 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -282,34 +282,23 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     if min_lng_all == float('inf'):
         return [start, end]
     
-    # 安全偏移距离（加大偏移量）
-    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 8)
+    # 使用极大安全偏移（50米转度）
+    safe_lng, safe_lat = meters_to_deg(50)
     
-    # 障碍物左侧位置（减去偏移）
-    left_x = min_lng_all - safe_dist_lng
+    # 向左移动极远距离
+    left_x = min_lng_all - safe_lng * 3
     
-    # 顶部位置（加上偏移和额外高度）
-    top_y = max_lat_all + safe_dist_lat * 3
+    # 向上移动到障碍物顶部以上
+    top_y = max_lat_all + safe_lat * 2
     
-    # 确保起点到第一个点不会穿过障碍物
-    # 如果起点已经在顶部以上，直接水平移动
-    if start[1] > top_y:
-        # 起点已经在顶部上方，直接水平向左再向下
-        path = [
-            start,
-            [left_x, start[1]],
-            [left_x, end[1]],
-            end
-        ]
-    else:
-        # 标准路径：先向上，再向左，再向下
-        path = [
-            start,
-            [start[0], top_y],      # 垂直向上到安全高度
-            [left_x, top_y],        # 水平向左到障碍物左侧
-            [left_x, end[1]],       # 垂直向下到终点纬度
-            end
-        ]
+    # 构建路径
+    path = [
+        start,
+        [start[0], top_y],      # 先向上飞到安全高度
+        [left_x, top_y],        # 再向左飞很远
+        [left_x, end[1]],       # 再向下飞到终点高度
+        end
+    ]
     
     return path
     
