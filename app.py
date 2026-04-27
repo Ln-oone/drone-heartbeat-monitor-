@@ -257,16 +257,13 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
     向左绕行：2个绕行点，沿障碍物左侧边界
-    绕行点1：障碍物左上角外侧
-    绕行点2：障碍物左下角外侧
-    路径：起点 → 绕行点1 → 绕行点2 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 计算所有阻挡障碍物的整体边界
+    # 计算障碍物边界
     min_lng = float('inf')
     max_lat = -float('inf')
     min_lat = float('inf')
@@ -280,23 +277,35 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     if min_lng == float('inf'):
         return [start, end]
     
-    # 安全偏移距离（米转度）
-    safe_lng, safe_lat = meters_to_deg(safety_radius * 3)
+    # 安全偏移（20米）
+    safe_lng, safe_lat = meters_to_deg(20)
     
-    # 绕行点1：障碍物左上角外侧（向左偏移，向上偏移一点）
-    waypoint1 = [
-        min_lng - safe_lng * 2,  # 向左偏移
-        max_lat + safe_lat       # 顶部上方一点
-    ]
+    # 左侧X坐标（统一向左偏移）
+    left_x = min_lng - safe_lng * 2
     
-    # 绕行点2：障碍物左下角外侧（向左偏移，向下偏移一点）
-    waypoint2 = [
-        min_lng - safe_lng * 2,  # 向左偏移（与点1相同X）
-        min_lat - safe_lat       # 底部下方一点
-    ]
+    # 绕行点1：左上角（Y = 障碍物顶部 + 偏移）
+    waypoint1 = [left_x, max_lat + safe_lat]
     
-    # 构建路径：起点 → 绕行点1 → 绕行点2 → 终点
-    path = [start, waypoint1, waypoint2, end]
+    # 绕行点2：左下角（Y = 障碍物底部 - 偏移）
+    waypoint2 = [left_x, min_lat - safe_lat]
+    
+    # 构建路径
+    path = [start]
+    
+    # 如果起点不在左侧，添加过渡点
+    if start[0] > left_x:
+        # 先从起点水平向左飞到左侧X坐标
+        path.append([left_x, start[1]])
+    
+    path.append(waypoint1)
+    path.append(waypoint2)
+    
+    # 从绕行点2到终点
+    if end[0] > left_x:
+        # 先水平向右飞到终点的X坐标
+        path.append([end[0], waypoint2[1]])
+    
+    path.append(end)
     
     return path
     
