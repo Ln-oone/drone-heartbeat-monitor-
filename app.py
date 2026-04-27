@@ -256,41 +256,47 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：沿障碍物左侧边界航行
+    向左绕行：2个绕行点，沿障碍物左侧边界
+    绕行点1：障碍物左上角外侧
+    绕行点2：障碍物左下角外侧
+    路径：起点 → 绕行点1 → 绕行点2 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 获取障碍物左侧边界点
-    left_edge_points = []
-    for obs in blocking_obs:
-        coords = obs.get('polygon', [])
-        if coords:
-            min_lng = min(p[0] for p in coords)
-            for p in coords:
-                if abs(p[0] - min_lng) < meters_to_deg(1)[0]:
-                    left_edge_points.append(p)
+    # 计算所有阻挡障碍物的整体边界
+    min_lng = float('inf')
+    max_lat = -float('inf')
+    min_lat = float('inf')
     
-    if not left_edge_points:
+    for obs in blocking_obs:
+        for point in obs.get('polygon', []):
+            min_lng = min(min_lng, point[0])
+            max_lat = max(max_lat, point[1])
+            min_lat = min(min_lat, point[1])
+    
+    if min_lng == float('inf'):
         return [start, end]
     
-    # 去重并排序（从上到下）
-    unique_points = []
-    for p in left_edge_points:
-        if not any(abs(p[0]-up[0])<1e-7 and abs(p[1]-up[1])<1e-7 for up in unique_points):
-            unique_points.append(p)
-    unique_points.sort(key=lambda p: p[1], reverse=True)
+    # 安全偏移距离（米转度）
+    safe_lng, safe_lat = meters_to_deg(safety_radius * 3)
     
-    # 安全偏移
-    safe_lng, _ = meters_to_deg(safety_radius * 2)
+    # 绕行点1：障碍物左上角外侧（向左偏移，向上偏移一点）
+    waypoint1 = [
+        min_lng - safe_lng * 2,  # 向左偏移
+        max_lat + safe_lat       # 顶部上方一点
+    ]
     
-    # 构建路径
-    path = [start]
-    for p in unique_points:
-        path.append([p[0] - safe_lng, p[1]])
-    path.append(end)
+    # 绕行点2：障碍物左下角外侧（向左偏移，向下偏移一点）
+    waypoint2 = [
+        min_lng - safe_lng * 2,  # 向左偏移（与点1相同X）
+        min_lat - safe_lat       # 底部下方一点
+    ]
+    
+    # 构建路径：起点 → 绕行点1 → 绕行点2 → 终点
+    path = [start, waypoint1, waypoint2, end]
     
     return path
     
