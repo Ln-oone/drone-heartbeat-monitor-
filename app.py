@@ -256,7 +256,7 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从顶部绕过障碍物
+    向左绕行：从顶部绕过障碍物（精确控制各段距离）
     路径：起点 → 垂直向上（长距离）→ 垂直向右 → 垂直向下（到终点上方）→ 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
@@ -264,37 +264,58 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
     if not blocking_obs:
         return [start, end]
     
-    # 计算障碍物边界
-    max_lng = -float('inf')
-    max_lat = -float('inf')
-    min_lat = float('inf')
+    # 计算所有阻挡障碍物的整体边界
+    min_lng_all = float('inf')
+    max_lng_all = -float('inf')
+    min_lat_all = float('inf')
+    max_lat_all = -float('inf')
     
     for obs in blocking_obs:
-        for point in obs.get('polygon', []):
-            max_lng = max(max_lng, point[0])
-            max_lat = max(max_lat, point[1])
-            min_lat = min(min_lat, point[1])
+        coords = obs.get('polygon', [])
+        if coords:
+            for point in coords:
+                min_lng_all = min(min_lng_all, point[0])
+                max_lng_all = max(max_lng_all, point[0])
+                min_lat_all = min(min_lat_all, point[1])
+                max_lat_all = max(max_lat_all, point[1])
     
-    if max_lng == -float('inf'):
+    if min_lng_all == float('inf'):
         return [start, end]
     
-    # 安全偏移
-    offset_lng, offset_lat = meters_to_deg(safety_radius * 5)
+    # 安全偏移距离（米转度）
+    base_offset_lng, base_offset_lat = meters_to_deg(safety_radius * 3)
     
-    # 计算障碍物高度
-    obstacle_height = max_lat - min_lat
+    # 计算障碍物的尺寸
+    obstacle_width = max_lng_all - min_lng_all
+    obstacle_height = max_lat_all - min_lat_all
     
-    # 第一个绕行点：在障碍物顶部上方（长距离）
-    # 向上移动距离 = 障碍物高度 + 安全偏移 × 2
-    waypoint_up = [start[0], max_lat + obstacle_height + offset_lat * 2]
+    # 起点到第一个绕行点的距离要长（在障碍物顶部上方较远位置）
+    # 向上移动距离 = 障碍物顶部到起点的距离 + 障碍物高度的0.8倍 + 安全距离
+    up_distance = (max_lat_all - start[1]) + obstacle_height * 0.8 + base_offset_lat * 2
+    top_y = start[1] + max(up_distance, obstacle_height + base_offset_lat * 2)
     
-    # 第二个绕行点：在右侧
-    waypoint_right = [max_lng + offset_lng, waypoint_up[1]]
+    # 右侧X坐标：障碍物最右侧 + 障碍物宽度的0.5倍 + 安全距离
+    right_x = max_lng_all + max(obstacle_width * 0.5, base_offset_lng * 2)
     
-    # 第三个绕行点：在终点上方
-    waypoint_down = [waypoint_right[0], end[1] + obstacle_height * 0.5]
+    # 最后一个绕行点在终点的上方（距离终点有一定高度）
+    # 向下移动距离 = 终点到顶部的高度 - 终点上方的偏移
+    end_top_offset = max(obstacle_height * 0.3, base_offset_lat)
+    end_top_y = end[1] + end_top_offset
     
-    return [start, waypoint_up, waypoint_right, waypoint_down, end]
+    # 如果终点上方点比顶部点还高，则调整
+    if end_top_y > top_y:
+        end_top_y = top_y - base_offset_lat
+    
+    # 构建路径
+    path = [
+        start,                          # 起点
+        [start[0], top_y],              # 1. 垂直向上（长距离，到障碍物顶部上方）
+        [right_x, top_y],               # 2. 垂直向右（越过障碍物）
+        [right_x, end_top_y],           # 3. 垂直向下（到终点上方）
+        end                             # 4. 到终点
+    ]
+    
+    return path
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
