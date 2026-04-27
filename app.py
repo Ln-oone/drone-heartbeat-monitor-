@@ -256,33 +256,42 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：绝对可靠的矩形路径，确保从所有障碍物的左侧安全绕过。
-    路径：起点 -> 向左平移 -> 垂直移动到终点高度 -> 向右平移至终点
+    向左绕行：沿障碍物左侧边界弧形绕过
+    路径：起点 → 左上角外侧 → 左下角外侧 → 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
-
+    
     if not blocking_obs:
         return [start, end]
-
-    # 1. 找到所有障碍物的最左侧边界
+    
+    # 计算所有阻挡障碍物的整体边界
     min_lng = float('inf')
+    max_lat = -float('inf')
+    min_lat = float('inf')
+    
     for obs in blocking_obs:
         for point in obs.get('polygon', []):
             min_lng = min(min_lng, point[0])
-
-    # 2. 设定一个绝对安全的左侧X坐标 (在障碍物最左侧的基础上，再向左偏移50米)
-    # 这里使用固定的50米，确保万无一失
-    SAFE_OFFSET_METERS = 50
-    safe_offset_lng, _ = meters_to_deg(SAFE_OFFSET_METERS)
-    left_boundary_x = min_lng - safe_offset_lng
-
-    # 3. 构建经典的矩形绕行路径
-    # 路径: 起点 -> 向左平移 -> 垂直移动到终点高度 -> 向右平移至终点
-    waypoint_left = [left_boundary_x, start[1]]
-    waypoint_vertical = [left_boundary_x, end[1]]
-
-    path = [start, waypoint_left, waypoint_vertical, end]
-    return path
+            max_lat = max(max_lat, point[1])
+            min_lat = min(min_lat, point[1])
+    
+    if min_lng == float('inf'):
+        return [start, end]
+    
+    # 安全偏移（30米）
+    safe_lng, safe_lat = meters_to_deg(30)
+    
+    # 左侧X坐标（障碍物左侧向外偏移）
+    left_x = min_lng - safe_lng
+    
+    # 绕行点1：左上角外侧
+    waypoint1 = [left_x, max_lat + safe_lat]
+    
+    # 绕行点2：左下角外侧
+    waypoint2 = [left_x, min_lat - safe_lat]
+    
+    # 构建路径
+    return [start, waypoint1, waypoint2, end]
     
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
