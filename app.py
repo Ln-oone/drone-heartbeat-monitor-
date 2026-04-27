@@ -256,154 +256,69 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：沿障碍物左侧边界航行，紧贴边界向终点靠近
+    向左绕行：起点 → 障碍物顶部上方 → 向右绕过 → 终点
+    使用多段直线确保完全不穿过障碍物
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 收集所有阻挡障碍物的左侧边界点
-    left_boundary_points = []
+    # 计算所有阻挡障碍物的整体边界
+    min_lng_all = float('inf')
+    max_lng_all = -float('inf')
+    min_lat_all = float('inf')
+    max_lat_all = -float('inf')
     
     for obs in blocking_obs:
         coords = obs.get('polygon', [])
-        if not coords or len(coords) < 3:
-            continue
-        
-        # 找到障碍物的最左侧经度
-        min_lng = min(p[0] for p in coords)
-        tolerance = meters_to_deg(0.5)[0]  # 0.5米容差
-        
-        # 提取左侧边界上的所有点
-        left_edge = []
-        for p in coords:
-            if abs(p[0] - min_lng) < tolerance:
-                left_edge.append(p)
-        
-        if left_edge:
-            # 按纬度排序
-            left_edge.sort(key=lambda p: p[1])
-            
-            # 添加安全偏移（向外偏移安全半径）
-            offset_lng, offset_lat = meters_to_deg(safety_radius)
-            
-            # 记录左侧边界的上下端点
-            left_boundary_points.append({
-                'top': [left_edge[-1][0] - offset_lng, left_edge[-1][1] + offset_lat],
-                'bottom': [left_edge[0][0] - offset_lng, left_edge[0][1] - offset_lat],
-                'all_points': [[p[0] - offset_lng, p[1]] for p in left_edge],
-                'min_lat': left_edge[0][1],
-                'max_lat': left_edge[-1][1],
-                'min_lng': min_lng
-            })
+        if coords:
+            bounds = get_polygon_bounds(coords)
+            if bounds:
+                min_lng_all = min(min_lng_all, bounds['min_lng'])
+                max_lng_all = max(max_lng_all, bounds['max_lng'])
+                min_lat_all = min(min_lat_all, bounds['min_lat'])
+                max_lat_all = max(max_lat_all, bounds['max_lat'])
     
-    if not left_boundary_points:
+    if min_lng_all == float('inf'):
         return [start, end]
     
-    # 合并所有障碍物的左侧边界点
-    all_boundary_points = []
-    for bp in left_boundary_points:
-        all_boundary_points.extend(bp['all_points'])
+    # 计算安全偏移距离
+    offset_lng, offset_lat = meters_to_deg(safety_radius * 3)  # 3倍安全半径作为缓冲
     
-    # 去重并按纬度排序
-    unique_points = []
-    for p in all_boundary_points:
-        if not any(abs(p[0] - up[0]) < 1e-8 and abs(p[1] - up[1]) < 1e-8 for up in unique_points):
-            unique_points.append(p)
-    unique_points.sort(key=lambda p: p[1])
+    # 计算关键点
+    # 点1：障碍物群左上角（上方安全位置）
+    top_y = max_lat_all + offset_lat * 2
+    top_x = min_lng_all - offset_lng
     
-    # 计算整体边界范围
-    overall_min_lat = min(p[1] for p in unique_points)
-    overall_max_lat = max(p[1] for p in unique_points)
-    overall_min_lng = min(p[0] for p in unique_points)
+    # 点2：障碍物群右上角（右侧安全位置）
+    right_x = max_lng_all + offset_lng * 2
+    right_y = top_y
     
-    # 根据起点和终点的位置决定从上侧还是下侧进入
-    start_lat = start[1]
-    end_lat = end[1]
-    center_lat = (overall_min_lat + overall_max_lat) / 2
-    
-    # 构建路径
+    # 构建多段直线路径：起点 → 左上角 → 右上角 → 终点
     path = [start]
     
-    # 判断从上方还是下方绕行
-    if start_lat > center_lat or (start_lat > overall_min_lat and end_lat > overall_max_lat):
-        # 从上方绕行
-        # 找到最上方的边界点附近作为切入点
-        top_points = [p for p in unique_points if p[1] > overall_max_lat - (overall_max_lat - overall_min_lat) * 0.3]
-        if top_points:
-            entry_y = max(p[1] for p in top_points)
-            entry_x = overall_min_lng
-            entry_point = [entry_x, entry_y]
-            
-            # 添加从起点到切入点的过渡
-            if distance(start, entry_point) > meters_to_deg(15)[0]:
-                mid_x = (start[0] + entry_point[0]) / 2
-                mid_y = (start[1] + entry_point[1]) / 2
-                path.append([mid_x, mid_y])
-            path.append(entry_point)
-            
-            # 沿左侧边界向下移动
-            descending_points = [p for p in unique_points if p[1] <= entry_y]
-            descending_points.sort(key=lambda p: p[1], reverse=True)
-            path.extend(descending_points)
-            
-            # 添加切出点到终点
-            exit_point = descending_points[-1] if descending_points else entry_point
-            if distance(exit_point, end) > meters_to_deg(15)[0]:
-                mid_x = (exit_point[0] + end[0]) / 2
-                mid_y = (exit_point[1] + end[1]) / 2
-                path.append([mid_x, mid_y])
-        else:
-            path.extend(unique_points)
-            
+    # 第一段：起点到障碍物群左上角
+    waypoint1 = [top_x, top_y]
+    path.append(waypoint1)
+    
+    # 第二段：沿着顶部向右移动到右侧
+    waypoint2 = [right_x, top_y]
+    path.append(waypoint2)
+    
+    # 第三段：从右侧向下/向终点方向移动
+    # 计算终点的合理连接点
+    if end[1] > max_lat_all:
+        # 终点在下方，直接向下
+        waypoint3 = [right_x, end[1]]
+        path.append(waypoint3)
     else:
-        # 从下方绕行
-        bottom_points = [p for p in unique_points if p[1] < overall_min_lat + (overall_max_lat - overall_min_lat) * 0.3]
-        if bottom_points:
-            entry_y = min(p[1] for p in bottom_points)
-            entry_x = overall_min_lng
-            entry_point = [entry_x, entry_y]
-            
-            # 添加从起点到切入点的过渡
-            if distance(start, entry_point) > meters_to_deg(15)[0]:
-                mid_x = (start[0] + entry_point[0]) / 2
-                mid_y = (start[1] + entry_point[1]) / 2
-                path.append([mid_x, mid_y])
-            path.append(entry_point)
-            
-            # 沿左侧边界向上移动
-            ascending_points = [p for p in unique_points if p[1] >= entry_y]
-            ascending_points.sort(key=lambda p: p[1])
-            path.extend(ascending_points)
-            
-            # 添加切出点到终点
-            exit_point = ascending_points[-1] if ascending_points else entry_point
-            if distance(exit_point, end) > meters_to_deg(15)[0]:
-                mid_x = (exit_point[0] + end[0]) / 2
-                mid_y = (exit_point[1] + end[1]) / 2
-                path.append([mid_x, mid_y])
-        else:
-            path.extend(unique_points)
+        # 终点在上方，需要调整
+        waypoint3 = [right_x, end[1] + offset_lat]
+        path.append(waypoint3)
     
+    # 最后到达终点
     path.append(end)
-    
-    # 简化路径，移除冗余的共线点
-    if len(path) > 2:
-        simplified = [path[0]]
-        for i in range(1, len(path) - 1):
-            prev = simplified[-1]
-            curr = path[i]
-            nxt = path[i + 1]
-            
-            # 计算叉积，检查是否共线
-            cross = abs((prev[0] - curr[0]) * (nxt[1] - curr[1]) - 
-                       (prev[1] - curr[1]) * (nxt[0] - curr[0]))
-            
-            if cross > 1e-8:  # 不共线，保留
-                simplified.append(curr)
-        simplified.append(path[-1])
-        path = simplified
     
     return path
 
