@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 # ==================== 配置常量 ====================
 @dataclass
 class Config:
+    """系统配置类"""
     SCHOOL_CENTER_GCJ: List[float] = field(default_factory=lambda: [118.7490, 32.2340])
     DEFAULT_A_GCJ: List[float] = field(default_factory=lambda: [118.746956, 32.232945])
     DEFAULT_B_GCJ: List[float] = field(default_factory=lambda: [118.751589, 32.235204])
@@ -256,7 +257,10 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 def find_left_path(start: List[float], end: List[float], 
                   obstacles_gcj: List[Dict], flight_altitude: float, 
                   safety_radius: float = 5) -> List[List[float]]:
-    """向左绕行路径 - 先向上绕过障碍物，再向右向终点靠近"""
+    """
+    向左绕行路径 - 按照图片所示：从起点出发，先向左上方绕过障碍物顶部，再向右拐向终点
+    路径: 起点 -> 左上方绕行点 -> 障碍物顶部上方 -> 终点
+    """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
@@ -284,42 +288,38 @@ def find_left_path(start: List[float], end: List[float],
     # 计算偏移量（安全距离）
     offset_lng, offset_lat = meters_to_deg(safety_radius * 2)
     
-    # 向左绕行：先向上到障碍物上方，然后向右到与终点相同经度，再向下到终点
-    # 1. 先向上绕过障碍物顶部
-    waypoint1 = [start[0], max_lat_all + offset_lat * 3]
+    # 向左绕行：先向左走到障碍物左侧，再向上绕过顶部，最后向右拐向终点
+    left_x = min_lng_all - offset_lng * 2  # 向左偏移
+    top_y = max_lat_all + offset_lat * 2   # 向上偏移（绕过顶部）
     
-    # 2. 向右移动到终点经度
-    waypoint2 = [end[0], max_lat_all + offset_lat * 3]
+    # 构建路径：起点 -> 左上角点 -> 顶部中间点 -> 终点
+    waypoints = [start]
     
-    # 3. 向下到终点
-    waypoint3 = [end[0], end[1]]
+    # 1. 先向左走到障碍物左侧
+    waypoints.append([left_x, start[1]])
     
-    # 构建路径
-    path = [start, waypoint1, waypoint2]
+    # 2. 再向上走到障碍物顶部上方
+    waypoints.append([left_x, top_y])
     
-    # 检查是否需要添加更多航点
-    if distance(waypoint2, waypoint3) > 0:
-        path.append(waypoint3)
-    else:
-        path.append(end)
+    # 3. 向右拐到终点上方，然后向下到终点
+    waypoints.append([end[0], top_y])
     
-    # 确保终点被包含
-    if path[-1] != end:
-        path.append(end)
+    # 4. 最后到达终点
+    waypoints.append(end)
     
     # 简化路径：移除冗余的共线点
-    simplified = [path[0]]
-    for i in range(1, len(path) - 1):
+    simplified = [waypoints[0]]
+    for i in range(1, len(waypoints) - 1):
         p1 = simplified[-1]
-        p2 = path[i]
-        p3 = path[i + 1]
+        p2 = waypoints[i]
+        p3 = waypoints[i + 1]
         
-        # 计算叉积判断是否共线
+        # 检查是否共线
         cross = (p2[0] - p1[0]) * (p3[1] - p2[1]) - (p2[1] - p1[1]) * (p3[0] - p2[0])
-        if abs(cross) > 1e-10:
+        if abs(cross) > 1e-10:  # 不共线，保留该点
             simplified.append(p2)
     
-    simplified.append(path[-1])
+    simplified.append(waypoints[-1])
     
     return simplified
 
@@ -751,14 +751,14 @@ def render_path_strategy(flight_alt: float):
             st.rerun()
     
     with col_dir2:
-        if st.button("⬅️ 向左绕行（向上绕过）", use_container_width=True, type="primary" if st.session_state.current_direction == "向左绕行" else "secondary"):
+        if st.button("⬅️ 向左绕行", use_container_width=True, type="primary" if st.session_state.current_direction == "向左绕行" else "secondary"):
             st.session_state.current_direction = "向左绕行"
             st.session_state.planned_path = create_avoidance_path(
                 st.session_state.points_gcj['A'], st.session_state.points_gcj['B'],
                 st.session_state.obstacles_gcj, flight_alt, "向左绕行",
                 st.session_state.safety_radius
             )
-            st.success("已切换到向左绕行模式（先向上绕过障碍物）")
+            st.success("已切换到向左绕行模式（沿障碍物左上方绕过）")
             st.rerun()
     
     with col_dir3:
