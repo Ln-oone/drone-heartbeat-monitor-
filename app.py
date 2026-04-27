@@ -256,84 +256,40 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：沿着障碍物左侧边界航行，紧贴边界向终点靠近
-    路径：起点 → 障碍物左上角 → 沿左侧边界向下 → 终点
+    向左绕行：沿障碍物左侧边界航行
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 收集所有障碍物的左侧边界点
-    left_boundary_points = []
-    
+    # 获取障碍物左侧边界点
+    left_edge_points = []
     for obs in blocking_obs:
         coords = obs.get('polygon', [])
-        if not coords or len(coords) < 3:
-            continue
-        
-        # 找到障碍物最左侧的经度
-        min_lng = min(p[0] for p in coords)
-        tolerance = meters_to_deg(0.5)[0]  # 0.5米容差
-        
-        # 提取左侧边界上的所有点
-        for p in coords:
-            if abs(p[0] - min_lng) < tolerance:
-                left_boundary_points.append(p)
+        if coords:
+            min_lng = min(p[0] for p in coords)
+            for p in coords:
+                if abs(p[0] - min_lng) < meters_to_deg(1)[0]:
+                    left_edge_points.append(p)
     
-    if not left_boundary_points:
+    if not left_edge_points:
         return [start, end]
     
-    # 去重并按纬度排序（从上到下）
+    # 去重并排序（从上到下）
     unique_points = []
-    for p in left_boundary_points:
-        if not any(abs(p[0] - up[0]) < 1e-8 and abs(p[1] - up[1]) < 1e-8 for up in unique_points):
+    for p in left_edge_points:
+        if not any(abs(p[0]-up[0])<1e-7 and abs(p[1]-up[1])<1e-7 for up in unique_points):
             unique_points.append(p)
-    unique_points.sort(key=lambda p: p[1], reverse=True)  # 从上到下排序
+    unique_points.sort(key=lambda p: p[1], reverse=True)
     
-    # 添加安全偏移（向外偏移安全半径）
-    safe_lng, safe_lat = meters_to_deg(safety_radius * 2)
-    offset_points = [[p[0] - safe_lng, p[1]] for p in unique_points]
+    # 安全偏移
+    safe_lng, _ = meters_to_deg(safety_radius * 2)
     
     # 构建路径
     path = [start]
-    
-    # 找到距离起点最近的左侧边界点作为切入点
-    min_dist = float('inf')
-    entry_point = None
-    for p in offset_points:
-        dist = distance(start, p)
-        if dist < min_dist:
-            min_dist = dist
-            entry_point = p
-    
-    if entry_point:
-        # 添加过渡点（起点到左侧边界的平滑连接）
-        if distance(start, entry_point) > meters_to_deg(10)[0]:
-            mid_x = (start[0] + entry_point[0]) / 2
-            mid_y = (start[1] + entry_point[1]) / 2
-            path.append([mid_x, mid_y])
-        path.append(entry_point)
-    
-    # 添加所有左侧边界点（形成沿边界航行的路径）
-    # 只添加从切入点开始到终点的部分
-    start_idx = 0
-    if entry_point:
-        for i, p in enumerate(offset_points):
-            if abs(p[0] - entry_point[0]) < 1e-7 and abs(p[1] - entry_point[1]) < 1e-7:
-                start_idx = i
-                break
-    
-    # 添加从切入点开始的边界点
-    for i in range(start_idx, len(offset_points)):
-        if not path or distance(path[-1], offset_points[i]) > 1e-8:
-            path.append(offset_points[i])
-    
-    # 最后从最后一个边界点飞到终点
-    if distance(path[-1], end) > meters_to_deg(5)[0]:
-        mid_x = (path[-1][0] + end[0]) / 2
-        mid_y = (path[-1][1] + end[1]) / 2
-        path.append([mid_x, mid_y])
+    for p in unique_points:
+        path.append([p[0] - safe_lng, p[1]])
     path.append(end)
     
     return path
