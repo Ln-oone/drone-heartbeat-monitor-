@@ -256,41 +256,50 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从顶部绕过障碍物
-    第1个点：起点垂直向上到障碍物顶部上方
-    第2个点：在第1个点和终点的中点（水平方向）
-    第3个点：终点
+    向左绕行：从顶部绕过障碍物（精确距离控制）
+    第1段：最长（向上）
+    第2段：次长（向右）
+    第3段：最短（向下）
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
     if not blocking_obs:
         return [start, end]
     
-    # 计算障碍物最顶部
+    # 计算障碍物边界
+    max_lng = -float('inf')
     max_lat = -float('inf')
+    min_lat = float('inf')
     
     for obs in blocking_obs:
         for point in obs.get('polygon', []):
+            max_lng = max(max_lng, point[0])
             max_lat = max(max_lat, point[1])
+            min_lat = min(min_lat, point[1])
     
-    if max_lat == -float('inf'):
+    if max_lng == -float('inf'):
         return [start, end]
     
-    # 安全偏移（10米）
-    _, safe_lat = meters_to_deg(10)
+    # 安全偏移
+    safe_lng, safe_lat = meters_to_deg(safety_radius * 5)
     
-    # 第1个绕行点：起点垂直向上到障碍物顶部上面10米
-    waypoint1 = [start[0], max_lat + safe_lat]
+    # 障碍物尺寸
+    obstacle_height = max_lat - min_lat
+    obstacle_width = max_lng - min_lat  # 估算宽度
     
-    # 第2个绕行点：在第1个点和终点的中点（只改变X坐标，Y保持不变）
-    # 计算中点X坐标
-    mid_x = (waypoint1[0] + end[0]) / 2
-    waypoint2 = [mid_x, waypoint1[1]]  # Y坐标与第1个点相同（保持高度）
+    # 计算各段距离系数
+    # 第1段：最长的向上距离
+    up_distance = max(obstacle_height * 4, safe_lat * 10)
+    point1 = [start[0], max_lat + up_distance]
     
-    # 第3个点：终点
-    waypoint3 = end
+    # 第2段：次长的向右距离
+    right_distance = max(obstacle_width * 2, safe_lng * 8)
+    point2 = [max_lng + right_distance, point1[1]]
     
-    return [start, waypoint1, waypoint2, waypoint3]
+    # 第3段：最短的向下距离（直接到终点）
+    point3 = end
+    
+    return [start, point1, point2, point3]
 
 def find_right_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
