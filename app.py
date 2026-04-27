@@ -256,8 +256,8 @@ def get_blocking_obstacles(start: List[float], end: List[float], obstacles_gcj: 
 
 def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dict], flight_altitude: float, safety_radius: float = 5) -> List[List[float]]:
     """
-    向左绕行：从顶部绕过障碍物（精确控制各段距离）
-    路径：起点 → 垂直向上（长距离）→ 垂直向右 → 垂直向下（到终点上方）→ 终点
+    向左绕行：从顶部绕过障碍物，在障碍物左侧通过
+    路径：起点 → 垂直向上（长距离）→ 垂直向左 → 垂直向下（到终点上方）→ 终点
     """
     blocking_obs = get_blocking_obstacles(start, end, obstacles_gcj, flight_altitude)
     
@@ -283,35 +283,26 @@ def find_left_path(start: List[float], end: List[float], obstacles_gcj: List[Dic
         return [start, end]
     
     # 安全偏移距离（米转度）
-    base_offset_lng, base_offset_lat = meters_to_deg(safety_radius * 3)
+    safe_dist_lng, safe_dist_lat = meters_to_deg(safety_radius * 5)
     
-    # 计算障碍物的尺寸
-    obstacle_width = max_lng_all - min_lng_all
+    # 计算障碍物的高度
     obstacle_height = max_lat_all - min_lat_all
     
-    # 起点到第一个绕行点的距离要长（在障碍物顶部上方较远位置）
-    # 向上移动距离 = 障碍物顶部到起点的距离 + 障碍物高度的0.8倍 + 安全距离
-    up_distance = (max_lat_all - start[1]) + obstacle_height * 0.8 + base_offset_lat * 2
-    top_y = start[1] + max(up_distance, obstacle_height + base_offset_lat * 2)
+    # 第一个绕行点：垂直向上到障碍物顶部上方（长距离）
+    top_y = max_lat_all + obstacle_height + safe_dist_lat * 2
     
-    # 右侧X坐标：障碍物最右侧 + 障碍物宽度的0.5倍 + 安全距离
-    right_x = max_lng_all + max(obstacle_width * 0.5, base_offset_lng * 2)
+    # 第二个绕行点：垂直向左到障碍物左侧（注意：是 min_lng，不是 max_lng）
+    left_x = min_lng_all - safe_dist_lng
     
-    # 最后一个绕行点在终点的上方（距离终点有一定高度）
-    # 向下移动距离 = 终点到顶部的高度 - 终点上方的偏移
-    end_top_offset = max(obstacle_height * 0.3, base_offset_lat)
-    end_top_y = end[1] + end_top_offset
-    
-    # 如果终点上方点比顶部点还高，则调整
-    if end_top_y > top_y:
-        end_top_y = top_y - base_offset_lat
+    # 第三个绕行点：垂直向下到终点上方
+    end_top_y = end[1] + obstacle_height * 0.5
     
     # 构建路径
     path = [
         start,                          # 起点
-        [start[0], top_y],              # 1. 垂直向上（长距离，到障碍物顶部上方）
-        [right_x, top_y],               # 2. 垂直向右（越过障碍物）
-        [right_x, end_top_y],           # 3. 垂直向下（到终点上方）
+        [start[0], top_y],              # 1. 垂直向上到顶部（长距离）
+        [left_x, top_y],                # 2. 垂直向左到障碍物左侧
+        [left_x, end_top_y],            # 3. 垂直向下到终点上方
         end                             # 4. 到终点
     ]
     
