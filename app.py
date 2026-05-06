@@ -1694,11 +1694,11 @@ def update_path_after_obstacle_change(flight_alt: float):
 
 # ==================== 主程序 ====================
 def main():
-    st.set_page_config(page_title="南京科技职业学院 - 无人机地面站系统", layout="wide")
+    st.set_page_config(page_title="demo无人机地面站系统", layout="wide")
     
     init_session_state()
     
-    st.title("🏫 南京科技职业学院 - 无人机地面站系统")
+    st.title("🏫 demo无人机地面站系统")
     st.markdown("---")
     
     page, map_type, drone_speed, flight_alt, auto_save = render_sidebar()
