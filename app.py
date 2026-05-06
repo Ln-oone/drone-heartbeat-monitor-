@@ -177,6 +177,94 @@ def cleanup_old_backups():
     except Exception as e:
         st.warning(f"清理备份文件时出错: {e}")
 
+# ==================== 新增功能：路径段安全检查 ====================
+def check_path_segment_safety(segment_start: List[float], segment_end: List[float], 
+                               obstacles_gcj: List[Dict], flight_altitude: float, 
+                               safety_radius: float) -> Tuple[bool, List[Dict]]:
+    """
+    检查整个路径段是否与所有障碍物保持安全距离
+    返回：(是否安全, 危险障碍物列表)
+    """
+    if not segment_start or not segment_end:
+        return True, []
+    
+    dangerous_obstacles = []
+    
+    for obs in obstacles_gcj:
+        coords = obs.get('polygon', [])
+        obs_height = obs.get('height', 30)
+        
+        # 只检查高于飞行高度的障碍物
+        if obs_height <= flight_altitude:
+            continue
+        
+        if coords and len(coords) >= 3:
+            # 检查路径段与障碍物每条边的距离
+            min_dist_to_obs = float('inf')
+            
+            for i in range(len(coords)):
+                p1 = coords[i]
+                p2 = coords[(i + 1) % len(coords)]
+                
+                # 计算路径段到障碍物边的距离
+                dist = segment_to_segment_distance_meters(segment_start, segment_end, p1, p2)
+                min_dist_to_obs = min(min_dist_to_obs, dist)
+                
+                # 也检查路径端点到障碍物的距离
+                dist_start = point_to_segment_distance_meters(segment_start, p1, p2)
+                dist_end = point_to_segment_distance_meters(segment_end, p1, p2)
+                min_dist_to_obs = min(min_dist_to_obs, dist_start, dist_end)
+            
+            # 如果最小距离小于安全半径，标记为危险
+            if min_dist_to_obs < safety_radius:
+                dangerous_obstacles.append({
+                    'obstacle': obs,
+                    'min_distance': min_dist_to_obs,
+                    'required_clearance': safety_radius - min_dist_to_obs
+                })
+    
+    return len(dangerous_obstacles) == 0, dangerous_obstacles
+
+def segment_to_segment_distance_meters(p1: List[float], p2: List[float], 
+                                         p3: List[float], p4: List[float]) -> float:
+    """计算两条线段之间的最短距离（米）"""
+    # 检查线段是否相交
+    if segments_intersect(p1, p2, p3, p4):
+        return 0.0
+    
+    # 计算端点到另一线段的最小距离
+    distances = [
+        point_to_segment_distance_meters(p1, p3, p4),
+        point_to_segment_distance_meters(p2, p3, p4),
+        point_to_segment_distance_meters(p3, p1, p2),
+        point_to_segment_distance_meters(p4, p1, p2)
+    ]
+    
+    return min(distances)
+
+
+def validate_entire_path(path: List[List[float]], obstacles_gcj: List[Dict], 
+                          flight_altitude: float, safety_radius: float) -> Tuple[bool, List[Dict]]:
+    """
+    验证整个飞行路径的安全距离
+    返回：(是否安全, 所有危险段信息)
+    """
+    all_dangerous = []
+    
+    for i in range(len(path) - 1):
+        is_safe, dangerous = check_path_segment_safety(
+            path[i], path[i + 1], obstacles_gcj, flight_altitude, safety_radius
+        )
+        
+        if not is_safe:
+            for danger in dangerous:
+                danger['segment_index'] = i
+                danger['segment_start'] = path[i]
+                danger['segment_end'] = path[i + 1]
+                all_dangerous.append(danger)
+    
+    return len(all_dangerous) == 0, all_dangerous
+
 def backup_config() -> Optional[str]:
     if os.path.exists(config.CONFIG_FILE):
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
