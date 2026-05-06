@@ -24,9 +24,9 @@ CONFIG_FILE = "obstacle_config.json"
 
 # ====================== 初始化 Session State ======================
 if "start_point" not in st.session_state:
-    st.session_state.start_point = (32.2345, 118.7492)
+    st.session_state.start_point = (32.232945,118.746956)
 if "end_point" not in st.session_state:
-    st.session_state.end_point = (32.2337, 118.7496)
+    st.session_state.end_point = ( 32.235204,118.751589)
 if "obstacles" not in st.session_state:
     st.session_state.obstacles = []
 if "flight_altitude" not in st.session_state:
