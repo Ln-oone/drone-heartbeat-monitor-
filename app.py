@@ -889,94 +889,168 @@ def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed:
     if st.session_state.heartbeat_sim.history:
         latest = st.session_state.heartbeat_sim.history[0]
         
+        # 计算当前航点信息
+        current_waypoint = 0
+        total_waypoints = 0
+        if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
+            total_waypoints = len(st.session_state.planned_path) - 2  # 减去起点和终点
+            # 根据当前进度估算当前航点
+            if latest.progress < 1.0:
+                segment_index = int(latest.progress * (len(st.session_state.planned_path) - 1))
+                current_waypoint = max(0, min(total_waypoints, segment_index))
+            else:
+                current_waypoint = total_waypoints
+        
+        # 计算预计到达时间
+        estimated_arrival = "计算中..."
+        if latest.speed > 0 and latest.remaining_distance > 0:
+            eta_seconds = latest.remaining_distance / latest.speed
+            if eta_seconds < 60:
+                estimated_arrival = f"{eta_seconds:.0f}秒"
+            elif eta_seconds < 3600:
+                estimated_arrival = f"{eta_seconds/60:.1f}分钟"
+            else:
+                estimated_arrival = f"{eta_seconds/3600:.1f}小时"
+        elif latest.arrived:
+            estimated_arrival = "已到达"
+        
+        # 计算电量模拟（基于飞行时间和速度消耗）
+        # 假设满电22.2V，飞行时间越长电压越低
+        max_flight_time = 1800  # 假设最大飞行时间30分钟
+        battery_percentage = max(0, min(100, (1 - latest.flight_time / max_flight_time) * 100))
+        if latest.voltage:
+            # 根据电压计算更精确的电量
+            voltage_percentage = ((latest.voltage - 21.0) / (22.2 - 21.0)) * 100
+            battery_percentage = max(0, min(100, (battery_percentage + voltage_percentage) / 2))
+        
         # 飞行进度条
         st.markdown("### ✈️ 飞行进度")
         progress_percent = int(latest.progress * 100)
         st.progress(latest.progress, text=f"飞行进度：{progress_percent}%")
         
-        # 主要指标卡片
-        st.markdown("### 📊 实时数据")
-        col1, col2, col3, col4, col5 = st.columns(5)
+        # 主要指标卡片 - 重新设计为6个核心指标
+        st.markdown("### 📊 实时飞行数据")
+        
+        # 第一行：3个核心指标
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             st.metric(
-                label="⏰ 飞行时间",
-                value=f"{latest.flight_time:.1f}s",
-                delta=None
+                label="🎯 当前航点",
+                value=f"{current_waypoint} / {total_waypoints}",
+                delta=None,
+                help="当前经过的航点序号/总航点数"
             )
+            # 添加航点进度条
+            if total_waypoints > 0:
+                waypoint_progress = current_waypoint / total_waypoints
+                st.progress(waypoint_progress, text=f"航点进度: {int(waypoint_progress*100)}%")
         
         with col2:
             st.metric(
-                label="📍 当前位置",
-                value=f"{latest.lat:.6f}, {latest.lng:.6f}",
-                delta=None
+                label="💨 飞行速度",
+                value=f"{latest.speed:.1f} m/s",
+                delta=f"{drone_speed}% 系数",
+                help="当前飞行速度（米/秒）"
             )
+            # 添加速度单位转换
+            speed_kmh = latest.speed * 3.6
+            st.caption(f"≈ {speed_kmh:.1f} km/h")
         
         with col3:
             st.metric(
-                label="📏 飞行高度",
-                value=f"{latest.altitude} m",
-                delta=None
+                label="⏰ 已用时间",
+                value=f"{int(latest.flight_time // 60):02d}:{int(latest.flight_time % 60):02d}",
+                delta=f"{latest.flight_time:.1f}秒",
+                help="从起飞开始的累计飞行时间"
             )
         
+        # 第二行：3个核心指标
+        col4, col5, col6 = st.columns(3)
+        
         with col4:
+            remaining_km = latest.remaining_distance / 1000
+            if remaining_km >= 1:
+                distance_text = f"{remaining_km:.2f} km"
+            else:
+                distance_text = f"{latest.remaining_distance:.0f} m"
+            
             st.metric(
-                label="💨 当前速度",
-                value=f"{latest.speed} m/s",
-                delta=f"{drone_speed}%"
+                label="📏 剩余距离",
+                value=distance_text,
+                delta=None,
+                help="距离终点的直线距离"
             )
         
         with col5:
-            remaining_dist = latest.remaining_distance
             st.metric(
-                label="📏 剩余距离",
-                value=f"{remaining_dist:.0f} m",
-                delta=None
+                label="🕐 预计到达",
+                value=estimated_arrival,
+                delta=None,
+                help="根据当前速度预计到达终点所需时间"
             )
-        
-        # 设备状态
-        st.markdown("### 🔧 设备状态")
-        col6, col7, col8, col9, col10 = st.columns(5)
+            # 如果即将到达，显示提示
+            if latest.remaining_distance < 100 and not latest.arrived:
+                st.info("🏁 即将到达目的地！")
         
         with col6:
+            # 电量模拟显示
+            battery_color = "🟢" if battery_percentage > 50 else "🟡" if battery_percentage > 20 else "🔴"
             st.metric(
-                label="🔋 电池电压",
-                value=f"{latest.voltage} V",
-                delta=None
+                label="🔋 电量模拟",
+                value=f"{battery_color} {battery_percentage:.0f}%",
+                delta=f"{latest.voltage:.1f}V",
+                help="模拟电量（基于电压和飞行时间）"
             )
+            # 添加电量警告
+            if battery_percentage < 20:
+                st.warning("⚠️ 电量不足，请尽快返航！")
+            elif battery_percentage < 50:
+                st.info("💡 电量中等，请注意飞行时间")
+        
+        # 第三行：补充信息
+        st.markdown("### 📍 位置与状态")
+        col7, col8, col9, col10 = st.columns(4)
         
         with col7:
             st.metric(
-                label="🛰️ 卫星数量",
-                value=f"{latest.satellites} 颗",
-                delta=None
+                label="📍 当前位置",
+                value=f"{latest.lat:.6f}, {latest.lng:.6f}",
+                delta=None,
+                help="当前经纬度坐标"
             )
         
         with col8:
             st.metric(
-                label="🎯 任务进度",
-                value=f"{progress_percent}%",
-                delta=None
+                label="📏 飞行高度",
+                value=f"{latest.altitude} m",
+                delta=None,
+                help="当前海拔高度"
             )
         
         with col9:
             st.metric(
-                label="🛡️ 安全半径",
-                value=f"{st.session_state.safety_radius} m",
-                delta=None
+                label="🛰️ 卫星数量",
+                value=f"{latest.satellites} 颗",
+                delta=None,
+                help="GPS卫星信号数量"
             )
         
         with col10:
             if latest.arrived:
                 status = "✅ 已完成"
+                status_color = "green"
             elif st.session_state.simulation_running:
                 status = "✈️ 飞行中"
+                status_color = "blue"
             else:
                 status = "⏸️ 已停止"
+                status_color = "orange"
             st.metric(
                 label="📌 飞行状态",
                 value=status,
-                delta=None
+                delta=None,
+                help="当前任务执行状态"
             )
         
         # 安全警告
@@ -985,6 +1059,17 @@ def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed:
         
         if latest.arrived:
             st.success("🎉 无人机已到达目的地！飞行任务完成！")
+            # 显示飞行总结
+            with st.expander("📊 飞行任务总结", expanded=True):
+                col_sum1, col_sum2, col_sum3 = st.columns(3)
+                with col_sum1:
+                    st.metric("总飞行时间", f"{int(latest.flight_time // 60):02d}:{int(latest.flight_time % 60):02d}")
+                with col_sum2:
+                    total_distance = st.session_state.heartbeat_sim.total_distance * 111000
+                    st.metric("总飞行距离", f"{total_distance:.0f} m")
+                with col_sum3:
+                    avg_speed = latest.speed if latest.speed > 0 else drone_speed * config.BASE_SPEED_MPS / 100
+                    st.metric("平均速度", f"{avg_speed:.1f} m/s")
         
         st.markdown("---")
         
@@ -994,48 +1079,58 @@ def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed:
         
         st.markdown("---")
         
-        # 数据图表
+        # 数据图表 - 优化为4个图表
         st.markdown("### 📈 实时数据图表")
+        
+        # 第一行图表
         col_ch1, col_ch2 = st.columns(2)
         
         with col_ch1:
-            st.subheader("📊 飞行高度变化")
-            if len(st.session_state.heartbeat_sim.history) > 1:
-                alt_data = []
-                for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
-                    alt_data.append({"时间": i, "高度(m)": h.altitude})
-                alt_df = pd.DataFrame(alt_data)
-                st.line_chart(alt_df, x="时间", y="高度(m)")
-        
-        with col_ch2:
-            st.subheader("⚡ 速度变化趋势")
+            st.subheader("📊 速度 vs 时间")
             if len(st.session_state.heartbeat_sim.history) > 1:
                 speed_data = []
                 for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
-                    speed_data.append({"时间": i, "速度(m/s)": h.speed})
+                    speed_data.append({"时间(s)": i * config.HEARTBEAT_INTERVAL, "速度(m/s)": h.speed})
                 speed_df = pd.DataFrame(speed_data)
-                st.line_chart(speed_df, x="时间", y="速度(m/s)")
+                st.line_chart(speed_df, x="时间(s)", y="速度(m/s)")
         
-        # 第三行图表
+        with col_ch2:
+            st.subheader("📏 剩余距离 vs 时间")
+            if len(st.session_state.heartbeat_sim.history) > 1:
+                dist_data = []
+                for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
+                    dist_data.append({"时间(s)": i * config.HEARTBEAT_INTERVAL, "剩余距离(m)": h.remaining_distance})
+                dist_df = pd.DataFrame(dist_data)
+                st.line_chart(dist_df, x="时间(s)", y="剩余距离(m)")
+        
+        # 第二行图表
         col_ch3, col_ch4 = st.columns(2)
         
         with col_ch3:
-            st.subheader("🔋 电压变化")
+            st.subheader("🔋 电量模拟 vs 时间")
             if len(st.session_state.heartbeat_sim.history) > 1:
-                voltage_data = []
+                battery_data = []
                 for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
-                    voltage_data.append({"时间": i, "电压(V)": h.voltage})
-                voltage_df = pd.DataFrame(voltage_data)
-                st.line_chart(voltage_df, x="时间", y="电压(V)")
+                    # 计算历史电量
+                    hist_max_time = 1800
+                    hist_battery = max(0, min(100, (1 - h.flight_time / hist_max_time) * 100))
+                    if h.voltage:
+                        hist_voltage_pct = ((h.voltage - 21.0) / (22.2 - 21.0)) * 100
+                        hist_battery = max(0, min(100, (hist_battery + hist_voltage_pct) / 2))
+                    battery_data.append({"时间(s)": i * config.HEARTBEAT_INTERVAL, "电量(%)": hist_battery})
+                battery_df = pd.DataFrame(battery_data)
+                st.line_chart(battery_df, x="时间(s)", y="电量(%)")
+                st.caption("💡 电量基于电压和飞行时间综合计算")
         
         with col_ch4:
-            st.subheader("🛰️ 卫星数量")
-            if len(st.session_state.heartbeat_sim.history) > 1:
-                sat_data = []
+            st.subheader("🎯 航点进度")
+            if len(st.session_state.heartbeat_sim.history) > 1 and total_waypoints > 0:
+                waypoint_data = []
                 for i, h in enumerate(st.session_state.heartbeat_sim.history[:30]):
-                    sat_data.append({"时间": i, "卫星数": h.satellites})
-                sat_df = pd.DataFrame(sat_data)
-                st.line_chart(sat_df, x="时间", y="卫星数")
+                    hist_waypoint = int(h.progress * total_waypoints)
+                    waypoint_data.append({"时间(s)": i * config.HEARTBEAT_INTERVAL, "已完成航点": hist_waypoint})
+                waypoint_df = pd.DataFrame(waypoint_data)
+                st.line_chart(waypoint_df, x="时间(s)", y="已完成航点")
         
         st.markdown("---")
         
@@ -1043,9 +1138,9 @@ def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed:
         st.markdown("### 📋 飞行日志记录")
         display_flight_history()
         
-        # 导出按钮
+        # 导出按钮和飞行控制
         st.markdown("---")
-        col_export1, col_export2, col_export3 = st.columns(3)
+        col_export1, col_export2, col_export3, col_export4 = st.columns(4)
         with col_export1:
             if st.button("📊 导出完整飞行数据", use_container_width=True, type="primary"):
                 df = st.session_state.heartbeat_sim.export_flight_data()
@@ -1060,10 +1155,30 @@ def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed:
                     )
         
         with col_export2:
+            if st.button("📊 导出航点数据", use_container_width=True):
+                if st.session_state.planned_path:
+                    waypoint_data = []
+                    for i, wp in enumerate(st.session_state.planned_path):
+                        waypoint_data.append({
+                            "航点序号": i,
+                            "经度": wp[0],
+                            "纬度": wp[1]
+                        })
+                    wp_df = pd.DataFrame(waypoint_data)
+                    csv = wp_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 下载航点CSV",
+                        data=csv,
+                        file_name=f"waypoints_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+        
+        with col_export3:
             if st.button("🔄 刷新数据", use_container_width=True):
                 st.rerun()
         
-        with col_export3:
+        with col_export4:
             if st.button("⏹️ 停止飞行", use_container_width=True):
                 st.session_state.simulation_running = False
                 st.session_state.heartbeat_sim.simulating = False
@@ -1082,6 +1197,26 @@ def render_flight_monitoring_page(map_type: str, flight_alt: float, drone_speed:
             st.info("💡 提示2：设置飞行高度和速度系数")
         with col_tip3:
             st.info("💡 提示3：点击「开始飞行」按钮启动模拟")
+        
+        # 显示规划航点预览
+        if st.session_state.planned_path and len(st.session_state.planned_path) > 1:
+            st.markdown("---")
+            st.subheader("🗺️ 规划航线预览")
+            total_waypoints = len(st.session_state.planned_path) - 2
+            st.success(f"📌 已规划 {total_waypoints} 个航点，点击开始飞行后将按此航线飞行")
+            
+            # 显示航点列表
+            with st.expander("📋 查看详细航点列表"):
+                waypoint_table = []
+                for i, wp in enumerate(st.session_state.planned_path):
+                    wp_type = "起点" if i == 0 else "终点" if i == len(st.session_state.planned_path)-1 else f"航点{i}"
+                    waypoint_table.append({
+                        "序号": i,
+                        "类型": wp_type,
+                        "经度": f"{wp[0]:.6f}",
+                        "纬度": f"{wp[1]:.6f}"
+                    })
+                st.table(pd.DataFrame(waypoint_table))
 
 
 def display_monitor_map(map_type: str, latest, flight_alt: float):
@@ -1559,11 +1694,11 @@ def update_path_after_obstacle_change(flight_alt: float):
 
 # ==================== 主程序 ====================
 def main():
-    st.set_page_config(page_title="南京科技职业学院 - 无人机地面站系统", layout="wide")
+    st.set_page_config(page_title="demo无人机地面站系统", layout="wide")
     
     init_session_state()
     
-    st.title("🏫 南京科技职业学院 - 无人机地面站系统")
+    st.title("🏫 demo无人机地面站系统")
     st.markdown("---")
     
     page, map_type, drone_speed, flight_alt, auto_save = render_sidebar()
