@@ -216,10 +216,6 @@ def get_blocking_obstacles(start: Tuple[float, float], end: Tuple[float, float],
                 blocking.append(obs)
     return blocking
 
-# ==================== 绕行算法模块（替换原代码中的对应部分） ====================
-# 注意：此模块需要替换原代码中从 "==================== 绕行算法 ====================" 
-# 到 "==================== 心跳包模拟器 ====================" 之间的内容
-
 import math
 from typing import List, Dict, Tuple, Optional
 
